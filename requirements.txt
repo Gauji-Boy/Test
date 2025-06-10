@@ -1,0 +1,6 @@
+PySide6
+jedi
+pyflakes
+black
+google-generativeai
+pygments
