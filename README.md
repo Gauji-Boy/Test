@@ -150,7 +150,3 @@ Aether Editor supports a host-client model for collaborative sessions.
     *   Ensure both parties are connected.
     *   Verify that the user with editing control (`You have editing control.` in the status bar) is the one typing.
     *   Check your firewall settings if you are having trouble connecting across different machines.
-
-## 📄 License
-
-This project is open-source and available under the [MIT License](LICENSE).
