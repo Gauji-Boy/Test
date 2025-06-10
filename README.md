@@ -60,10 +60,33 @@ Before you begin, ensure you have the following installed:
         ```
 
 4.  **Install Dependencies:**
-    With your virtual environment activated, install all necessary Python packages:
+    With your virtual environment activated, install all necessary Python packages by running:
     ```bash
-    pip install PySide6 jedi pyflakes black
+    pip install -r requirements.txt
     ```
+    This will install all packages listed in the `requirements.txt` file, including PySide6, jedi, pyflakes, black, and any other necessary libraries.
+
+### Automated Setup Checks
+
+The Aether Editor application (`main.py`) includes automated checks to ensure your environment is correctly configured before it starts. These checks run every time you launch the application:
+
+1.  **Python Version Check:** The application verifies that you are using Python 3.8 or newer.
+    *   If your Python version is older, you will see an error message like:
+        `Error: Python 3.8 or higher is required to run this application.`
+    *   **Solution:** Please install Python 3.8 or a more recent version from [python.org](https://www.python.org/downloads/).
+
+2.  **Dependency Check:** The application checks if all required packages (listed in `requirements.txt`) are installed.
+    *   If a package is missing or the wrong version is installed, you will see an error message like:
+        `Error: Missing or conflicting dependency: [package_name]`
+        `Please install the required dependencies by running: pip install -r requirements.txt`
+    *   If the `requirements.txt` file itself is missing, you'll see:
+        `Error: requirements.txt not found. Please ensure the file exists in the same directory as main.py.`
+    *   **Solution:** Ensure `requirements.txt` is present in the project's root directory. Then, navigate to the project's root directory in your terminal (with your virtual environment activated) and run:
+        ```bash
+        pip install -r requirements.txt
+        ```
+
+If both checks pass, the application will proceed to launch. These automated checks help ensure a smoother startup experience.
 
 ### How to Run
 
