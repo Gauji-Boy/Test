@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         self.is_host = False
         self.has_control = False # True if this instance has the editing token
         self.tab_data_map = {} # Map to store tab-specific data (e.g., file paths)
+        self.recent_folders = []
 
         self.current_run_mode = "Run" # Initial run mode
         self.setup_status_bar() # Initialize status bar labels first
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self.setup_network_connections() # Setup network signals and slots
         self.update_ui_for_control_state() # Initial UI update
         self.load_session() # Re-added: MainWindow handles its own session.
+        self._update_recent_menu()
 
     def _show_welcome_page(self):
         # Check if an initial "Untitled" tab exists and should be closed.
@@ -76,7 +78,7 @@ class MainWindow(QMainWindow):
                  self.close_tab(0)
 
 
-        welcome_page_widget = WelcomePage(self) 
+        welcome_page_widget = WelcomePage(self.recent_folders, self)
 
         # Add WelcomePage as a new tab
         index = self.tab_widget.addTab(welcome_page_widget, "Welcome")
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
         welcome_page_widget.new_file_requested.connect(self.create_new_file)
         welcome_page_widget.open_file_requested.connect(self.open_file)
         welcome_page_widget.open_folder_requested.connect(self.open_folder)
+        welcome_page_widget.recent_path_selected.connect(self.open_folder)
         
         print("LOG: Welcome page shown.")
 
@@ -125,8 +128,9 @@ class MainWindow(QMainWindow):
         session_data = {
             "root_path": root_path,
             "open_files": open_files,
-            "active_file_index": active_file_index 
+            "active_file_index": active_file_index
         }
+        session_data["recent_folders"] = self.recent_folders
 
         try:
             with open(session_file, 'w') as f:
@@ -147,6 +151,7 @@ class MainWindow(QMainWindow):
         try:
             with open(session_file, 'r') as f:
                 session_data = json.load(f)
+            self.recent_folders = session_data.get("recent_folders", [])
         except (IOError, json.JSONDecodeError) as e:
             print(f"LOG: load_session - Error reading or parsing session file {session_file}: {e}")
             self._show_welcome_page() # Show welcome page on error
@@ -158,6 +163,8 @@ class MainWindow(QMainWindow):
 
         if root_path and os.path.isdir(root_path):
             self.file_explorer.set_root_path(root_path)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
             self.terminal_widget.start_shell(root_path) # Also start terminal in this dir
 
         # Close the initial "Untitled" tab from setup_ui if there are files to open or a valid root_path
@@ -217,6 +224,7 @@ class MainWindow(QMainWindow):
         self.file_explorer = FileExplorer()
         self.file_explorer_dock.setWidget(self.file_explorer)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
+        self.file_explorer_dock.setVisible(False)
         self.file_explorer.file_opened.connect(self.open_new_tab)
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
@@ -229,6 +237,7 @@ class MainWindow(QMainWindow):
         self.bottom_tab_widget = QTabWidget()
         self.terminal_dock.setWidget(self.bottom_tab_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+        self.terminal_dock.setVisible(False)
 
 
         # Tab 2: Interactive Terminal
@@ -275,6 +284,11 @@ class MainWindow(QMainWindow):
         open_folder_action.triggered.connect(self.open_folder)
         file_menu.addAction(open_folder_action)
 
+        file_menu.addSeparator() # Optional separator
+        self.recent_menu = file_menu.addMenu("Open &Recent")
+        # self.recent_menu will be populated by _update_recent_menu()
+
+        file_menu.addSeparator() # Optional separator before Exit
         exit_action = QAction("&Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
@@ -311,6 +325,19 @@ class MainWindow(QMainWindow):
         self.stop_session_action.setShortcut("Ctrl+T")
         self.stop_session_action.triggered.connect(self.stop_current_session)
         session_menu.addAction(self.stop_session_action)
+
+    def _update_recent_menu(self):
+        if not hasattr(self, 'recent_menu') or self.recent_menu is None: # Check if recent_menu exists
+            return # Should have been created in setup_menu
+
+        self.recent_menu.clear()
+        for folder_path in self.recent_folders:
+            action = QAction(folder_path, self)
+            # Corrected lambda to pass the specific path
+            action.triggered.connect(lambda checked=False, path=folder_path: self.open_folder(path))
+            self.recent_menu.addAction(action)
+
+        self.recent_menu.setEnabled(bool(self.recent_folders))
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
@@ -578,6 +605,14 @@ class MainWindow(QMainWindow):
         if isinstance(current_widget, CodeEditor):
             return current_widget
         return None
+
+    def _add_to_recent_folders(self, folder_path: str):
+        if folder_path in self.recent_folders:
+            self.recent_folders.remove(folder_path)
+        self.recent_folders.insert(0, folder_path)
+        while len(self.recent_folders) > 10:
+            self.recent_folders.pop()
+        self._update_recent_menu() # This method will be implemented later
 
     # New _handle_run_request method
     @Slot()
@@ -882,6 +917,9 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             selected_directory = dialog.selectedFiles()[0]
             self.file_explorer.set_root_path(selected_directory)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
+            self._add_to_recent_folders(selected_directory)
             self.status_bar.showMessage(f"Opened folder: {selected_directory}")
             # Start shell in the newly opened folder
             self.terminal_widget.start_shell(selected_directory)
@@ -992,6 +1030,8 @@ class MainWindow(QMainWindow):
         if file_dialog.exec():
             selected_file = file_dialog.selectedFiles()[0]
             self.open_new_tab(selected_file)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
 
     def save_current_file(self):
         current_index = self.tab_widget.currentIndex()
