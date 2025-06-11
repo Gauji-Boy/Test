@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
 from PySide6.QtGui import QFont, QTextCursor
-from PySide6.QtCore import Qt, Signal, Slot, QProcess
+from PySide6.QtCore import Qt, Signal, Slot, QProcess, QProcessEnvironment
 import os
 import platform
 
@@ -38,12 +38,15 @@ class InteractiveTerminal(QWidget):
 
 
     def start_shell(self, working_dir: str):
+        print(f"DEBUG: InteractiveTerminal.start_shell received working_dir: '{working_dir}'")
         if self.shell_process and self.shell_process.state() == QProcess.Running:
             self.shell_process.kill()
             self.shell_process.waitForFinished()
 
         self.shell_process = QProcess()
+        print(f"DEBUG: Attempting to set working directory to: '{working_dir}'")
         self.shell_process.setWorkingDirectory(working_dir)
+        print(f"DEBUG: QProcess.setWorkingDirectory call completed.")
 
         system = platform.system()
         if system == "Windows":
@@ -58,14 +61,30 @@ class InteractiveTerminal(QWidget):
         self.shell_process.finished.connect(self._handle_finished)
 
         # Set environment variables for a non-interactive shell to behave more like an interactive one
-        env = QProcess.systemEnvironment()
+        process_env = QProcessEnvironment.systemEnvironment()
         # You might need to customize these further depending on the shell and desired behavior
         if system == "Linux" or system == "Darwin":
-            env.append("TERM=xterm-256color") # Emulate a terminal
-            env.append("PS1=\\u@\\h:\\w\\$ ") # Basic prompt for bash/zsh
-        self.shell_process.setProcessEnvironment(env)
+            process_env.insert("TERM", "xterm-256color") # Emulate a terminal
+            process_env.insert("PS1", "\\u@\\h:\\w\\$ ") # Basic prompt for bash/zsh
+        self.shell_process.setProcessEnvironment(process_env)
 
-        self.shell_process.start(shell_path)
+        # Robustly set initial working directory
+        if system == "Windows":
+            print(f"DEBUG: Starting shell with: 'cmd.exe', ['/K', 'cd', '/D', '{working_dir}']")
+            # For cmd.exe, /K keeps the window open after command, cd /D changes drive and directory
+            self.shell_process.start("cmd.exe", ["/K", "cd", "/D", working_dir])
+        elif system == "Linux" or system == "Darwin":
+            # For bash/zsh, execute 'cd' then 'exec' the shell to replace the current process
+            # This makes the new shell inherit the changed directory.
+            # Quoting working_dir handles spaces.
+            cd_command = f"cd '{working_dir}' && exec {shell_path}"
+            print(f"DEBUG: Starting shell with: '{shell_path}', ['-c', '{cd_command}']")
+            self.shell_process.start(shell_path, ["-c", cd_command])
+        else: # Should have already returned if OS is unsupported
+            print(f"DEBUG: Starting shell with: '{shell_path}' (fallback for unsupported OS)")
+            self.shell_process.start(shell_path) # Fallback, though unlikely to be reached
+
+        print(f"DEBUG: Shell process started. ID: {self.shell_process.processId()}")
         self.text_edit.appendPlainText(f"Shell started in {working_dir}\n")
         self._append_prompt()
 
