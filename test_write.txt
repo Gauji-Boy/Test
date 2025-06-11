@@ -1,1 +1,0 @@
-This is a test line written by Roo to check file persistence.
