@@ -65,18 +65,18 @@ class MainWindow(QMainWindow):
         if self.tab_widget.count() == 1:
             editor_widget = self.tab_widget.widget(0)
             # Check if it's a CodeEditor instance before accessing tab_data_map specific to editors
-            if isinstance(editor_widget, CodeEditor):
+            if isinstance(editor_widget, CodeEditor): 
                 tab_data = self.tab_data_map.get(editor_widget, {})
                 if tab_data.get("path") is None and not tab_data.get("is_dirty", False):
                     print("LOG: Closing initial untitled/clean tab before showing welcome page.")
-                    self.close_tab(0)
+                    self.close_tab(0) 
             # If it's not a CodeEditor, it might be an already open Welcome Page, close it too if it's the only tab.
             elif isinstance(editor_widget, WelcomePage):
                  print("LOG: Closing existing Welcome Page before showing a new one.")
                  self.close_tab(0)
 
 
-        welcome_page_widget = WelcomePage(self)
+        welcome_page_widget = WelcomePage(self) 
 
         # Add WelcomePage as a new tab
         index = self.tab_widget.addTab(welcome_page_widget, "Welcome")
@@ -84,13 +84,13 @@ class MainWindow(QMainWindow):
 
         # Make the Welcome Page tab non-closable
         tab_bar = self.tab_widget.tabBar()
-        tab_bar.setTabButton(index, QTabBar.RightSide, None)
+        tab_bar.setTabButton(index, QTabBar.RightSide, None) 
 
         # Connect signals from WelcomePage to MainWindow methods
         welcome_page_widget.new_file_requested.connect(self.create_new_file)
         welcome_page_widget.open_file_requested.connect(self.open_file)
         welcome_page_widget.open_folder_requested.connect(self.open_folder)
-
+        
         print("LOG: Welcome page shown.")
 
     # initialize_project method removed
@@ -106,11 +106,11 @@ class MainWindow(QMainWindow):
         root_path = ""
         if self.file_explorer.model(): # Ensure model exists
             root_path = self.file_explorer.model().rootPath()
-
+        
         open_files = []
         for i in range(self.tab_widget.count()):
             editor_widget = self.tab_widget.widget(i)
-            if isinstance(editor_widget, CodeEditor):
+            if isinstance(editor_widget, CodeEditor): 
                 # Do not save the Welcome Page tab if it's identified by a specific title
                 if self.tab_widget.tabText(i) == "Welcome": # Assuming "Welcome" is the title of the welcome tab
                     continue
@@ -125,18 +125,18 @@ class MainWindow(QMainWindow):
         session_data = {
             "root_path": root_path,
             "open_files": open_files,
-            "active_file_index": active_file_index
+            "active_file_index": active_file_index 
         }
 
         try:
             with open(session_file, 'w') as f:
-                json.dump(session_data, f, indent=4)
+                json.dump(session_data, f, indent=4) 
             print(f"LOG: Session saved to {session_file}")
         except IOError as e:
             print(f"LOG: save_session - Error writing session file {session_file}: {e}")
         except Exception as e:
             print(f"LOG: save_session - Unexpected error saving session: {e}")
-
+            
     def load_session(self):
         session_file = self._get_session_file_path()
         if not os.path.exists(session_file):
@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
                 self.open_new_tab(file_path)
             else:
                 print(f"LOG: load_session - File path from session does not exist: {file_path}")
-
+        
         if not open_files_paths and not (root_path and os.path.isdir(root_path)):
             # No valid files or root path from session, show welcome page
             self._show_welcome_page()
@@ -239,8 +239,8 @@ class MainWindow(QMainWindow):
         # self.terminal_widget.line_entered.connect(self._on_terminal_input) # Removed: New terminal handles input
 
         # Initial empty tab is no longer opened here. load_session() will handle it.
-        # self.open_new_tab()
-
+        # self.open_new_tab() 
+        
         # Start shell in home directory on startup
         self.terminal_widget.start_shell(QStandardPaths.writableLocation(QStandardPaths.HomeLocation))
 
@@ -934,7 +934,7 @@ class MainWindow(QMainWindow):
         # 1. Context-Aware Path Detection
         # If file explorer is empty (no root path), default to a known writable location
         target_directory_default = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-
+        
         current_explorer_root = self.file_explorer.model().rootPath() if self.file_explorer.model() and self.file_explorer.model().rootPath() else None
 
         target_directory = None
@@ -944,7 +944,7 @@ class MainWindow(QMainWindow):
             selected_path = self.file_explorer.model().filePath(selected_index) # Use model()
             if os.path.isdir(selected_path):
                 target_directory = selected_path
-            else:
+            else: 
                 target_directory = os.path.dirname(selected_path)
         elif current_explorer_root: # Nothing selected, but explorer has a root
              target_directory = current_explorer_root

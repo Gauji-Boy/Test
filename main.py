@@ -1,7 +1,7 @@
 import sys
 from PySide6.QtWidgets import QApplication
 # Assuming main_window.py is in the same directory and contains MainWindow
-from main_window import MainWindow
+from main_window import MainWindow 
 
 # Optional: Setup for high DPI displays if needed
 # try:
