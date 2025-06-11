@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
 from PySide6.QtGui import QFont, QTextCursor
-from PySide6.QtCore import Qt, Signal, Slot, QProcess
+from PySide6.QtCore import Qt, Signal, Slot, QProcess, QProcessEnvironment
 import os
 import platform
 
@@ -58,12 +58,12 @@ class InteractiveTerminal(QWidget):
         self.shell_process.finished.connect(self._handle_finished)
 
         # Set environment variables for a non-interactive shell to behave more like an interactive one
-        env = QProcess.systemEnvironment()
+        process_env = QProcessEnvironment.systemEnvironment()
         # You might need to customize these further depending on the shell and desired behavior
         if system == "Linux" or system == "Darwin":
-            env.append("TERM=xterm-256color") # Emulate a terminal
-            env.append("PS1=\\u@\\h:\\w\\$ ") # Basic prompt for bash/zsh
-        self.shell_process.setProcessEnvironment(env)
+            process_env.insert("TERM", "xterm-256color") # Emulate a terminal
+            process_env.insert("PS1", "\\u@\\h:\\w\\$ ") # Basic prompt for bash/zsh
+        self.shell_process.setProcessEnvironment(process_env)
 
         self.shell_process.start(shell_path)
         self.text_edit.appendPlainText(f"Shell started in {working_dir}\n")
