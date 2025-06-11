@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
 
         if root_path and os.path.isdir(root_path):
             self.file_explorer.set_root_path(root_path)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
             self.terminal_widget.start_shell(root_path) # Also start terminal in this dir
 
         # Close the initial "Untitled" tab from setup_ui if there are files to open or a valid root_path
@@ -217,6 +219,7 @@ class MainWindow(QMainWindow):
         self.file_explorer = FileExplorer()
         self.file_explorer_dock.setWidget(self.file_explorer)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
+        self.file_explorer_dock.setVisible(False)
         self.file_explorer.file_opened.connect(self.open_new_tab)
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
@@ -229,6 +232,7 @@ class MainWindow(QMainWindow):
         self.bottom_tab_widget = QTabWidget()
         self.terminal_dock.setWidget(self.bottom_tab_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+        self.terminal_dock.setVisible(False)
 
 
         # Tab 2: Interactive Terminal
@@ -882,6 +886,8 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             selected_directory = dialog.selectedFiles()[0]
             self.file_explorer.set_root_path(selected_directory)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
             self.status_bar.showMessage(f"Opened folder: {selected_directory}")
             # Start shell in the newly opened folder
             self.terminal_widget.start_shell(selected_directory)
@@ -992,6 +998,8 @@ class MainWindow(QMainWindow):
         if file_dialog.exec():
             selected_file = file_dialog.selectedFiles()[0]
             self.open_new_tab(selected_file)
+            self.file_explorer_dock.setVisible(True)
+            self.terminal_dock.setVisible(True)
 
     def save_current_file(self):
         current_index = self.tab_widget.currentIndex()
