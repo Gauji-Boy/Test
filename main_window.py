@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
     ai_write_file_result = Signal(str, bool, str) # file_path, success, message
     ai_list_directory_result = Signal(str, str) # path, json_string_of_contents/error_message
 
-    def __init__(self):
+    def __init__(self, initial_path=None):
         super().__init__()
         self.setWindowTitle("Aether Editor")
         self.setGeometry(100, 100, 1200, 800)
@@ -57,15 +57,71 @@ class MainWindow(QMainWindow):
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
         self.update_ui_for_control_state() # Initial UI update
-        self.load_session() # Load session on startup
+        # self.load_session() # Removed: Session loading/initial path handling is now explicit or via AppController
 
-    def _get_session_file_path(self):
-        # Use AppConfigLocation for user-specific non-essential config
-        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        app_specific_config_dir = os.path.join(config_dir, "AetherEditor") # Or ".aether_editor"
-        # Ensure this directory exists
-        os.makedirs(app_specific_config_dir, exist_ok=True)
-        return os.path.join(app_specific_config_dir, "session.json")
+        if initial_path:
+            self.initialize_project(initial_path)
+        else:
+            # If no initial path, ensure a default state (e.g., an empty tab)
+            # This is important if setup_ui no longer opens an initial tab by default,
+            # or if MainWindow can be shown without AppController providing a path.
+            if self.tab_widget.count() == 0:
+                self.open_new_tab()
+
+
+    def initialize_project(self, path: str):
+        # import os # Ensure os is imported at the top of the file if not already (it is)
+        if not path:
+            print("LOG: initialize_project called with no path.")
+            # Ensure a default state if path is somehow None or empty
+            if self.tab_widget.count() == 0:
+                 self.open_new_tab() # Open an untitled tab
+            return
+
+        print(f"LOG: Initializing project with path: {path}")
+        if os.path.isdir(path):
+            project_dir = path
+            # file_to_open = None # Not used directly here
+            self.file_explorer.set_root_path(project_dir)
+            self.terminal_widget.start_shell(project_dir)
+
+            # If an "Untitled" tab is open and it's the only one, and it's clean, close it.
+            if self.tab_widget.count() == 1:
+                first_tab_widget = self.tab_widget.widget(0)
+                if isinstance(first_tab_widget, CodeEditor):
+                    first_tab_data = self.tab_data_map.get(first_tab_widget, {})
+                    if first_tab_data.get("path") is None and not first_tab_data.get("is_dirty"):
+                        self.close_tab(0) # Close the initial "Untitled" tab
+
+            # After potentially closing the initial tab, if no tabs are open (e.g. opening an empty folder)
+            # ensure at least one new "Untitled" tab is present.
+            if self.tab_widget.count() == 0:
+                 self.open_new_tab()
+
+        elif os.path.isfile(path):
+            project_dir = os.path.dirname(path)
+            file_to_open = path
+            self.file_explorer.set_root_path(project_dir) # Set explorer to the file's directory
+            self.terminal_widget.start_shell(project_dir) # Start terminal in file's directory
+
+            # If an "Untitled" tab is open and it's the only one, and it's clean, close it before opening the new file.
+            if self.tab_widget.count() == 1:
+                first_tab_widget = self.tab_widget.widget(0)
+                if isinstance(first_tab_widget, CodeEditor):
+                    first_tab_data = self.tab_data_map.get(first_tab_widget, {})
+                    if first_tab_data.get("path") is None and not first_tab_data.get("is_dirty"):
+                        self.close_tab(0)
+
+            self.open_new_tab(file_to_open) # open_new_tab handles opening the file
+        else:
+            print(f"LOG: Provided initial path is neither a file nor a directory: {path}")
+            # Fallback: open an empty untitled tab if none exist.
+            if self.tab_widget.count() == 0:
+                 self.open_new_tab()
+            # QMessageBox.warning(self, "Path Error", f"The specified path could not be opened: {path}")
+
+    # Removed _get_session_file_path, save_session, and load_session methods
+    # Their functionality is now handled by AppController or is obsolete.
 
     def setup_ui(self):
         # Central Editor View (QTabWidget)
@@ -1019,95 +1075,9 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Formatting is only supported for Python files (.py).")
 
 
-    def save_session(self):
-        session_file = self._get_session_file_path()
-        root_path = ""
-        if self.file_explorer.model(): # Ensure model exists
-            root_path = self.file_explorer.model().rootPath()
-
-        open_files = []
-        for i in range(self.tab_widget.count()):
-            editor_widget = self.tab_widget.widget(i)
-            if isinstance(editor_widget, CodeEditor):
-                tab_data = self.tab_data_map.get(editor_widget)
-                # Only save paths that exist and are not None (i.e., saved files)
-                if tab_data and tab_data.get("path") and os.path.exists(tab_data.get("path")):
-                    open_files.append(tab_data.get("path"))
-
-        active_file_index = self.tab_widget.currentIndex()
-
-        session_data = {
-            "root_path": root_path,
-            "open_files": open_files,
-            "active_file_index": active_file_index
-        }
-
-        try:
-            with open(session_file, 'w') as f:
-                json.dump(session_data, f, indent=4)
-            print(f"LOG: Session saved to {session_file}")
-        except IOError as e:
-            print(f"LOG: save_session - Error writing session file {session_file}: {e}")
-            # QMessageBox.warning(self, "Session Save Error", f"Could not save session to {session_file}:\n{e}")
-        except Exception as e:
-            print(f"LOG: save_session - Unexpected error saving session: {e}")
-            # QMessageBox.critical(self, "Session Save Error", f"An unexpected error occurred while saving the session:\n{e}")
-
-    def load_session(self):
-        session_file = self._get_session_file_path()
-
-        if os.path.exists(session_file):
-            try:
-                with open(session_file, 'r') as f:
-                    session_data = json.load(f)
-            except (IOError, json.JSONDecodeError) as e:
-                print(f"LOG: load_session - Error reading or parsing session file {session_file}: {e}")
-                # Fallback to default state if file is corrupted or unreadable
-                if self.tab_widget.count() == 0:
-                    self.open_new_tab()
-                return # Stop processing if session file is invalid
-
-            root_path = session_data.get("root_path")
-            open_files_paths = session_data.get("open_files", [])
-            active_file_index = session_data.get("active_file_index", 0)
-
-            # Restore Folder
-            if root_path and os.path.isdir(root_path):
-                self.file_explorer.set_root_path(root_path)
-
-            # Handle Initial Tab and Restore Files
-            # Close initial "Untitled" tab only if there are files to restore
-            if self.tab_widget.count() == 1 and open_files_paths:
-                initial_editor_widget = self.tab_widget.widget(0)
-                if isinstance(initial_editor_widget, CodeEditor):
-                    initial_tab_data = self.tab_data_map.get(initial_editor_widget, {})
-                    if initial_tab_data.get("path") is None and not initial_tab_data.get("is_dirty", False):
-                        self.close_tab(0)
-
-            for file_path in open_files_paths:
-                if os.path.exists(file_path):
-                    self.open_new_tab(file_path)
-                else:
-                    print(f"LOG: load_session - File path from session does not exist: {file_path}")
-
-            # Restore Active Tab
-            if 0 <= active_file_index < self.tab_widget.count():
-                self.tab_widget.setCurrentIndex(active_file_index)
-            elif self.tab_widget.count() > 0: # Safety fallback
-                self.tab_widget.setCurrentIndex(0)
-
-            print(f"LOG: Session loaded from {session_file}")
-
-        else:
-            print("LOG: load_session - No session file found, starting with default state.")
-            # Ensure a default state: if no tabs are open (e.g. after initial tab was closed by logic above but no files were opened)
-            # or if it's truly the first launch.
-            # The __init__ already calls open_new_tab(), so this is a safeguard mainly if that initial tab was closed
-            # and no session files were loaded.
-            if self.tab_widget.count() == 0:
-                self.open_new_tab()
-
     def closeEvent(self, event):
+        # Session saving is no longer handled by MainWindow directly.
+        # AppController might handle it, or it's removed from the current scope.
         unsaved_changes_exist = False
         for i in range(self.tab_widget.count()):
             editor = self.tab_widget.widget(i)
@@ -1147,7 +1117,7 @@ class MainWindow(QMainWindow):
                     self.tab_widget.setCurrentIndex(original_current_index)
         
         # Only save the session and accept the close event if all saves were successful or discarded
-        self.save_session()
+        # self.save_session() # Removed
         event.accept()
 
     @Slot(QPoint)
