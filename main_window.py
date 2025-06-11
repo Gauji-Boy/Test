@@ -92,10 +92,14 @@ class MainWindow(QMainWindow):
         self.bottom_tab_widget.addTab(self.terminal_widget, "Terminal")
         
         # Connect the interactive terminal's command_entered signal
-        self.terminal_widget.line_entered.connect(self._on_terminal_input)
+        # self.terminal_widget.line_entered.connect(self._on_terminal_input) # Removed: New terminal handles input
 
         # Initial empty tab
         self.open_new_tab() # This will now correctly set initial tab data
+
+        # Start shell in home directory on startup
+        self.terminal_widget.start_shell(QStandardPaths.writableLocation(QStandardPaths.HomeLocation))
+
 
     def setup_menu(self):
         menu_bar = self.menuBar()
@@ -471,27 +475,41 @@ class MainWindow(QMainWindow):
 
         working_directory = os.path.dirname(file_path)
 
-        # Create and own the QProcess object directly in MainWindow.
-        if hasattr(self, 'process') and self.process is not None:
-            self.process.kill() # Ensure any old process is gone
-        self.process = QProcess(self)
-        
-        # Connect ALL signals for maximum debugging visibility.
-        self.process.readyReadStandardOutput.connect(self._on_process_output)
-        self.process.readyReadStandardError.connect(self._on_process_error_output)
-        self.process.errorOccurred.connect(self._on_process_error)
-        self.process.finished.connect(self._on_process_finished)
-        self.process.started.connect(lambda: print("DEBUG: Signal 'started' was emitted for _handle_run_request."))
+        # Construct the command string
+        # Ensure file_path and output_file_no_ext are quoted if they contain spaces
+        quoted_file_path = f'"{file_path}"'
+        quoted_output_file_no_ext = f'"{output_file_no_ext}"'
 
-        self.process.setWorkingDirectory(working_directory)
+        # Replace placeholders in the command template parts
+        command_parts = [
+            part.replace("{file}", quoted_file_path)
+                .replace("{output_file}", quoted_output_file_no_ext)
+            for part in command_template
+        ]
         
-        # Start the process.
-        print(f"DEBUG: Calling QProcess.start() for run request: {executable} {arguments}")
-        self.process.start(executable, arguments)
+        # Join parts into a single command string
+        # For C++, the command might be "g++ {file} -o {output_file} && {output_file}"
+        # We need to handle this by potentially splitting if "&&" is present,
+        # or just joining if it's a simple command like "python -u {file}".
+        # For now, let's assume simple joining for commands that don't need chaining in this way
+        # or that the shell itself will handle the '&&' if present in the list.
+        final_command_str = " ".join(command_parts)
+
+        # If working_directory is different from where the shell is currently, cd into it first
+        # This is a simplified approach. A more robust solution might involve checking current shell dir.
+        # For now, we assume the shell started by start_shell is in a known state or CWD is managed by user.
+        # current_shell_dir = self.terminal_widget.get_current_working_directory() # Assuming such a method exists
+        # if working_directory != current_shell_dir:
+        #    final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
+        # else:
+        #    final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
+        # For simplicity, always prepend cd for now, as run_code_command will execute it in the current shell context.
         
-        if not self.process.waitForStarted(3000): # Wait up to 3 seconds
-            print("DEBUG: process.waitForStarted() timed out. The process likely failed to launch.")
-            self.terminal_widget.append_output("--- PROCESS FAILED TO START (Timeout) ---\n")
+        # Prepend cd to the command to ensure it runs in the correct directory
+        final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
+
+        print(f"DEBUG: Sending command to terminal: {final_command_str}")
+        self.terminal_widget.run_code_command(final_command_str)
 
         self.bottom_tab_widget.setCurrentWidget(self.terminal_widget) # Switch to interactive terminal
         self.terminal_dock.show()
@@ -501,73 +519,19 @@ class MainWindow(QMainWindow):
     def _run_diagnostic_test(self):
         print("--- DEBUG: Starting diagnostic test ---")
         
-        # 1. Clear the output panel to see the new output clearly.
         self.terminal_widget.clear_all()
-        self.terminal_widget.append_output("--- Starting Diagnostic Test ---\n")
+        # self.terminal_widget.append_output("--- Starting Diagnostic Test ---\n") # append_output removed
 
-        # 2. The simplest possible command. This checks if python is in the PATH.
-        #    We are NOT running a file. We are just running the python interpreter.
-        executable = "python"
-        arguments = ["--version"] # A command that prints to stdout and exits.
-        
-        print(f"DEBUG: Hardcoded command: {executable} {' '.join(arguments)}")
-        self.terminal_widget.append_output(f"> {executable} {' '.join(arguments)}\n")
+        command = "python --version"
+        print(f"DEBUG: Hardcoded command for diagnostic: {command}")
+        # self.terminal_widget.append_output(f"> {command}\n") # append_output removed
 
-        # 3. Create and own the QProcess object directly in MainWindow.
-        #    This is the most critical part to prevent garbage collection issues.
-        if hasattr(self, 'process') and self.process is not None:
-            self.process.kill() # Ensure any old process is gone
-        self.process = QProcess(self)
-        
-        # 4. Connect ALL signals for maximum debugging visibility.
-        self.process.readyReadStandardOutput.connect(self._on_process_output)
-        self.process.readyReadStandardError.connect(self._on_process_error_output)
-        self.process.errorOccurred.connect(self._on_process_error)
-        self.process.finished.connect(self._on_process_finished)
-        self.process.started.connect(lambda: print("DEBUG: Signal 'started' was emitted for diagnostic test."))
-
-        # 5. Start the process.
-        print("DEBUG: Calling QProcess.start()...")
-        self.process.start(executable, arguments)
-        
-        if not self.process.waitForStarted(3000): # Wait up to 3 seconds
-            print("DEBUG: process.waitForStarted() timed out. The process likely failed to launch.")
-            self.terminal_widget.append_output("--- PROCESS FAILED TO START (Timeout) ---\n")
-
+        self.terminal_widget.run_code_command(command)
         self.bottom_tab_widget.setCurrentWidget(self.terminal_widget) # Switch to interactive terminal
 
-    @Slot(str)
-    def _on_terminal_input(self, command):
-        # Append the command to the terminal output to show what was typed
-        self.terminal_widget.append_output(f"> {command}\n")
-        if self.process and self.process.state() == QProcess.Running:
-            self.process.write(f"{command}\n".encode())
-            print(f"DEBUG: Sent to process: {command}")
-        else:
-            self.terminal_widget.append_output("Error: No process is running to receive input.\n")
-
-    @Slot()
-    def _on_process_output(self):
-        data = self.process.readAllStandardOutput().data().decode(sys.getfilesystemencoding(), errors='ignore')
-        self.terminal_widget.append_output(data)
-
-    @Slot()
-    def _on_process_error_output(self):
-        error_output = self.process.readAllStandardError().data().decode(errors='ignore')
-        print(f"DEBUG: _on_process_error_output received:\n{error_output}")
-        self.terminal_widget.append_output(f"STDERR: {error_output}")
-
-    @Slot(int, QProcess.ExitStatus)
-    def _on_process_finished(self, exit_code, exit_status):
-        status = "crashed" if exit_status == QProcess.CrashExit else "finished"
-        print(f"DEBUG: Signal 'finished' was emitted. Code: {exit_code}, Status: {status}")
-        self.terminal_widget.append_output(f"\n--- Process {status} with exit code {exit_code} ---\n")
-
-    @Slot(QProcess.ProcessError)
-    def _on_process_error(self, error):
-        error_string = self.process.errorString()
-        print(f"DEBUG: Signal 'errorOccurred' was emitted. Error: {error_string}")
-        self.terminal_widget.append_output(f"\n--- PROCESS ERROR ---\n{error_string}\n")
+    # Removed _on_terminal_input as InteractiveTerminal now handles its input.
+    # Removed _on_process_output, _on_process_error_output, _on_process_finished, _on_process_error
+    # as QProcess is no longer managed by MainWindow directly for terminal operations.
 
     def update_editor_read_only_state(self):
         current_editor = self._get_current_code_editor()
@@ -774,6 +738,9 @@ class MainWindow(QMainWindow):
             selected_directory = dialog.selectedFiles()[0]
             self.file_explorer.set_root_path(selected_directory)
             self.status_bar.showMessage(f"Opened folder: {selected_directory}")
+            # Start shell in the newly opened folder
+            self.terminal_widget.start_shell(selected_directory)
+
 
     def close_tab(self, index=None): # Made index optional as per later definition
         if index is None:
