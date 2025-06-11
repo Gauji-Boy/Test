@@ -143,72 +143,26 @@ class MainWindow(QMainWindow):
 
     def load_session(self):
         session_file = self._get_session_file_path()
-        if not os.path.exists(session_file):
-            self._show_welcome_page()
-            return
-
-        try:
-            with open(session_file, 'r') as f:
-                session_data = json.load(f)
-            self.recent_folders = session_data.get("recent_folders", [])
-        except (IOError, json.JSONDecodeError) as e:
-            print(f"LOG: load_session - Error reading or parsing session file: {e}")
-            self._show_welcome_page()
-            return
-
-        root_path = session_data.get("root_path")
-        open_files_paths = session_data.get("open_files", [])
-        active_file_index = session_data.get("active_file_index", 0)
-
-        # If no files were open, show welcome page, regardless of root_path
-        if not open_files_paths:
-            print("LOG: load_session - No open files in session, showing welcome page.")
-            self._show_welcome_page()
-            self._update_recent_menu() # Ensure recent menu is populated
-            return
-
-        # Proceed to restore session as there were open files
-
-        # Close the initial "Untitled" tab from setup_ui if we are about to open actual files
-        if self.tab_widget.count() == 1:
-            initial_editor_widget = self.tab_widget.widget(0)
-            if isinstance(initial_editor_widget, CodeEditor):
-                initial_tab_data = self.tab_data_map.get(initial_editor_widget, {})
-                if initial_tab_data.get("path") is None and not initial_tab_data.get("is_dirty", False):
-                    if self.tab_widget.tabText(0) != "Welcome": # Avoid closing welcome if it somehow became the first tab
-                        self.close_tab(0)
-            elif self.tab_widget.tabText(0) == "Welcome": # If it's the welcome page itself (e.g. error in previous logic)
-                self.close_tab(0)
-
-
-        if root_path and os.path.isdir(root_path):
-            self.file_explorer.set_root_path(root_path)
-            self.file_explorer_dock.setVisible(True)
-            self.terminal_dock.setVisible(True)
-            self.terminal_widget.start_shell(root_path)
-
-        for file_path in open_files_paths:
-            if os.path.exists(file_path):
-                self.open_new_tab(file_path)
-            else:
-                print(f"LOG: load_session - File path from session does not exist: {file_path}")
         
-        # If, after attempting to open files, no tabs are open (e.g., all files were invalid)
-        if self.tab_widget.count() == 0:
-            print("LOG: load_session - All files from session failed to load, showing welcome page.")
-            self._show_welcome_page()
-            self._update_recent_menu() # Ensure recent menu is populated
-            return
+        if os.path.exists(session_file):
+            try:
+                with open(session_file, 'r') as f:
+                    session_data = json.load(f)
+                self.recent_folders = session_data.get("recent_folders", [])
+                # It's good practice to still load other keys if they might be needed by other logic
+                # or for diagnostics, even if not used for immediate UI restoration.
+                # root_path = session_data.get("root_path")
+                # open_files_paths = session_data.get("open_files", [])
+                # active_file_index = session_data.get("active_file_index", 0)
+                print(f"LOG: Session data loaded. Recent folders count: {len(self.recent_folders)}")
+            except (IOError, json.JSONDecodeError) as e:
+                print(f"LOG: load_session - Error reading or parsing session file {session_file}: {e}")
+                # self.recent_folders will be the default empty list from __init__
+        else:
+            print("LOG: load_session - No session file found.")
+            # self.recent_folders will be the default empty list from __init__
 
-        # Set active tab
-        if self.tab_widget.count() > 0:
-            final_active_index = active_file_index
-            if not (0 <= final_active_index < self.tab_widget.count()):
-                final_active_index = self.tab_widget.count() - 1 # Fallback to last opened tab
-            if final_active_index >= 0:
-                self.tab_widget.setCurrentIndex(final_active_index)
-
-        print(f"LOG: Session loaded from {session_file}")
+        self._show_welcome_page()
         self._update_recent_menu()
 
     def setup_ui(self):
@@ -1383,5 +1337,3 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("AI Assistant applied code changes.")
         else:
             self.status_bar.showMessage("AI Assistant tried to edit, but no active editor found.")
-
-
