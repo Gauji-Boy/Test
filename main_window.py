@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
                  self.close_tab(0)
 
 
-        welcome_page_widget = WelcomePage(self.recent_folders, self)
+        welcome_page_widget = WelcomePage(self.recent_folders, self) 
 
         # Add WelcomePage as a new tab
         index = self.tab_widget.addTab(welcome_page_widget, "Welcome")
@@ -336,7 +336,7 @@ class MainWindow(QMainWindow):
             # Corrected lambda to pass the specific path
             action.triggered.connect(lambda checked=False, path=folder_path: self.open_folder(path))
             self.recent_menu.addAction(action)
-
+        
         self.recent_menu.setEnabled(bool(self.recent_folders))
 
     def setup_toolbar(self):
