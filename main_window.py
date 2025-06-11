@@ -28,10 +28,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Aether Editor")
         self.setGeometry(100, 100, 1200, 800)
 
-        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
-        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
-
-        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
+        self.threadpool = QThreadPool.globalInstance()
+        self.threadpool.setMaxThreadCount(20) # Set maximum 20 threads
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
 
@@ -107,8 +105,8 @@ class MainWindow(QMainWindow):
     def save_session(self):
         session_file = self._get_session_file_path()
         root_path = ""
-        if self.file_explorer.model(): # Ensure model exists
-            root_path = self.file_explorer.model().rootPath()
+        if self.file_explorer.model: # Ensure model exists
+            root_path = self.file_explorer.model.rootPath()
         
         open_files = []
         for i in range(self.tab_widget.count()):
@@ -864,13 +862,19 @@ class MainWindow(QMainWindow):
             self.ai_list_directory_result.emit(path, f"Error listing directory {path}: {e}")
             print(f"LOG: _ai_handle_list_directory_request - Error listing directory {path}: {e}")
 
-    def open_folder(self):
+    def open_folder(self, path=None):
         self._close_welcome_page_if_open()
-        dialog = QFileDialog(self)
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        if dialog.exec():
-            selected_directory = dialog.selectedFiles()[0]
+        selected_directory = None
+        if path:
+            selected_directory = path
+        else:
+            dialog = QFileDialog(self)
+            dialog.setFileMode(QFileDialog.Directory)
+            dialog.setOption(QFileDialog.ShowDirsOnly, True)
+            if dialog.exec():
+                selected_directory = dialog.selectedFiles()[0]
+        
+        if selected_directory:
             self.file_explorer.set_root_path(selected_directory)
             self.file_explorer_dock.setVisible(True)
             self.terminal_dock.setVisible(True)
