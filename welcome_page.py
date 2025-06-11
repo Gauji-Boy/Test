@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QListWidget, QListWidgetItem
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
 
@@ -6,9 +6,11 @@ class WelcomePage(QWidget):
     new_file_requested = Signal()
     open_file_requested = Signal()
     open_folder_requested = Signal()
+    recent_path_selected = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, recent_folders, parent=None):
         super().__init__(parent)
+        self.recent_folders = recent_folders
 
         main_layout = QVBoxLayout(self)
         main_layout.setAlignment(Qt.AlignCenter)
@@ -54,12 +56,34 @@ class WelcomePage(QWidget):
         buttons_v_layout.addWidget(self.open_folder_button)
 
         main_layout.addLayout(buttons_v_layout)
-        main_layout.addStretch(2) # Add more stretch after buttons
+
+        # Recent Projects Label
+        recent_title_label = QLabel("Recent Projects:")
+        recent_title_label.setAlignment(Qt.AlignCenter)
+        # Optionally set font for this label, e.g., using the same 'font' as buttons or a new one
+        # title_font = QFont()
+        # title_font.setPointSize(12) # Example size
+        # recent_title_label.setFont(title_font)
+        main_layout.addWidget(recent_title_label)
+
+        # Recent Projects List
+        self.recent_list_widget = QListWidget()
+        self.recent_list_widget.setMaximumHeight(150) # Example height
+        for folder_path in self.recent_folders:
+            self.recent_list_widget.addItem(QListWidgetItem(folder_path))
+        main_layout.addWidget(self.recent_list_widget)
+
+        main_layout.addStretch(1) # Adjust stretch as needed
 
         # Connect signals
         self.new_file_button.clicked.connect(self.new_file_requested.emit)
         self.open_file_button.clicked.connect(self.open_file_requested.emit)
         self.open_folder_button.clicked.connect(self.open_folder_requested.emit)
+        self.recent_list_widget.itemDoubleClicked.connect(self._on_recent_item_doubled_clicked)
+
+    @Slot(QListWidgetItem)
+    def _on_recent_item_doubled_clicked(self, item):
+        self.recent_path_selected.emit(item.text())
 
 if __name__ == '__main__':
     # Example usage for testing WelcomePage independently
@@ -70,7 +94,7 @@ if __name__ == '__main__':
     # To test it in a tab-like environment
     test_window = QMainWindow()
     test_window.setWindowTitle("Welcome Page Test")
-    welcome_widget = WelcomePage()
+    welcome_widget = WelcomePage([]) # Pass empty list for recent_folders
     test_window.setCentralWidget(welcome_widget) # Just for testing, not in a tab
     test_window.resize(600, 400)
     test_window.show()
@@ -78,5 +102,6 @@ if __name__ == '__main__':
     welcome_widget.new_file_requested.connect(lambda: print("New File Requested"))
     welcome_widget.open_file_requested.connect(lambda: print("Open File Requested"))
     welcome_widget.open_folder_requested.connect(lambda: print("Open Folder Requested"))
+    welcome_widget.recent_path_selected.connect(lambda path: print(f"Recent Path Selected: {path}"))
 
     sys.exit(app.exec())
