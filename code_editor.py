@@ -43,8 +43,9 @@ class CodeEditor(QPlainTextEdit):
         self.textChanged.connect(self._update_language_and_highlighting)
         self.cursorPositionChanged.connect(self._emit_cursor_position)
         self._is_programmatic_change = False # Master control flag
-        self.document().undoStack().undoAvailable.connect(self.parent()._update_undo_redo_actions)
-        self.document().undoStack().redoAvailable.connect(self.parent()._update_undo_redo_actions)
+        # Defer connection to allow parent object to be fully initialized
+        QTimer.singleShot(0, lambda: self.undoStack().undoAvailable.connect(self.parent()._update_undo_redo_actions))
+        QTimer.singleShot(0, lambda: self.undoStack().redoAvailable.connect(self.parent()._update_undo_redo_actions))
 
     def _load_theme_config(self):
         print("LOG: CodeEditor._load_theme_config - Entry")
