@@ -1,7 +1,6 @@
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit, QTabBar
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit
 from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QActionGroup, QFont
-from PySide6.QtCore import Qt, QProcess, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject
-from welcome_page import WelcomePage
+from PySide6.QtCore import Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject
 from file_explorer import FileExplorer
 from code_editor import CodeEditor
 from interactive_terminal import InteractiveTerminal # Import the new interactive terminal
@@ -23,15 +22,16 @@ class MainWindow(QMainWindow):
     ai_write_file_result = Signal(str, bool, str) # file_path, success, message
     ai_list_directory_result = Signal(str, str) # path, json_string_of_contents/error_message
 
-    def __init__(self):
+    def __init__(self, initial_path=None):
         super().__init__()
         self.setWindowTitle("Aether Editor")
         self.setGeometry(100, 100, 1200, 800)
 
-        self.threadpool = QThreadPool.globalInstance()
-        self.threadpool.setMaxThreadCount(20) # Set maximum 20 threads
+        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
+        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
+        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
         self.is_updating_from_network = False # Flag to prevent echo loop
 
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         self.is_host = False
         self.has_control = False # True if this instance has the editing token
         self.tab_data_map = {} # Map to store tab-specific data (e.g., file paths)
-        self.recent_folders = []
+        self.recent_projects = [] # Initialize recent projects list
 
         self.current_run_mode = "Run" # Initial run mode
         self.setup_status_bar() # Initialize status bar labels first
@@ -57,112 +57,58 @@ class MainWindow(QMainWindow):
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
         self.update_ui_for_control_state() # Initial UI update
-        self.load_session() # Re-added: MainWindow handles its own session.
-        self._update_recent_menu()
-
-    def _show_welcome_page(self):
-        # Check if an initial "Untitled" tab exists and should be closed.
-        if self.tab_widget.count() == 1:
-            editor_widget = self.tab_widget.widget(0)
-            # Check if it's a CodeEditor instance before accessing tab_data_map specific to editors
-            if isinstance(editor_widget, CodeEditor): 
-                tab_data = self.tab_data_map.get(editor_widget, {})
-                if tab_data.get("path") is None and not tab_data.get("is_dirty", False):
-                    print("LOG: Closing initial untitled/clean tab before showing welcome page.")
-                    self.close_tab(0) 
-            # If it's not a CodeEditor, it might be an already open Welcome Page, close it too if it's the only tab.
-            elif isinstance(editor_widget, WelcomePage):
-                 print("LOG: Closing existing Welcome Page before showing a new one.")
-                 self.close_tab(0)
-
-
-        welcome_page_widget = WelcomePage(self.recent_folders, self)
-
-        # Add WelcomePage as a new tab
-        index = self.tab_widget.addTab(welcome_page_widget, "Welcome")
-        self.tab_widget.setCurrentIndex(index)
-
-        # Make the Welcome Page tab non-closable
-        tab_bar = self.tab_widget.tabBar()
-        tab_bar.setTabButton(index, QTabBar.RightSide, None) 
-
-        # Connect signals from WelcomePage to MainWindow methods
-        welcome_page_widget.new_file_requested.connect(self.create_new_file)
-        welcome_page_widget.open_file_requested.connect(self.open_file)
-        welcome_page_widget.open_folder_requested.connect(self.open_folder)
-        welcome_page_widget.recent_path_selected.connect(self.open_folder)
         
-        print("LOG: Welcome page shown.")
+        # Load session data at startup
+        session_data = self.load_session()
+        self.recent_projects = session_data.get("recent_projects", [])
 
-    # initialize_project method removed
-
-    def _get_session_file_path(self):
-        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        app_specific_config_dir = os.path.join(config_dir, "AetherEditor")
-        os.makedirs(app_specific_config_dir, exist_ok=True)
-        return os.path.join(app_specific_config_dir, "session.json")
-
-    def save_session(self):
-        session_file = self._get_session_file_path()
-        root_path = ""
-        if self.file_explorer.model: # Ensure model exists
-            root_path = self.file_explorer.model.rootPath()
-        
-        open_files = []
-        for i in range(self.tab_widget.count()):
-            editor_widget = self.tab_widget.widget(i)
-            if isinstance(editor_widget, CodeEditor): 
-                # Do not save the Welcome Page tab if it's identified by a specific title
-                if self.tab_widget.tabText(i) == "Welcome": # Assuming "Welcome" is the title of the welcome tab
-                    continue
-                tab_data = self.tab_data_map.get(editor_widget)
-                if tab_data and tab_data.get("path") and os.path.exists(tab_data.get("path")):
-                    open_files.append(tab_data.get("path"))
-
-        active_file_index = self.tab_widget.currentIndex()
-        # TODO: Adjust active_file_index if Welcome page was before it and is not saved.
-        # This is a simplification for now. A more robust way would be to map saved indices.
-
-        session_data = {
-            "root_path": root_path,
-            "open_files": open_files,
-            "active_file_index": active_file_index
-        }
-        session_data["recent_folders"] = self.recent_folders
-
-        try:
-            with open(session_file, 'w') as f:
-                json.dump(session_data, f, indent=4) 
-            print(f"LOG: Session saved to {session_file}")
-        except IOError as e:
-            print(f"LOG: save_session - Error writing session file {session_file}: {e}")
-        except Exception as e:
-            print(f"LOG: save_session - Unexpected error saving session: {e}")
-
-    def load_session(self):
-        session_file = self._get_session_file_path()
-        
-        if os.path.exists(session_file):
-            try:
-                with open(session_file, 'r') as f:
-                    session_data = json.load(f)
-                self.recent_folders = session_data.get("recent_folders", [])
-                # It's good practice to still load other keys if they might be needed by other logic
-                # or for diagnostics, even if not used for immediate UI restoration.
-                # root_path = session_data.get("root_path")
-                # open_files_paths = session_data.get("open_files", [])
-                # active_file_index = session_data.get("active_file_index", 0)
-                print(f"LOG: Session data loaded. Recent folders count: {len(self.recent_folders)}")
-            except (IOError, json.JSONDecodeError) as e:
-                print(f"LOG: load_session - Error reading or parsing session file {session_file}: {e}")
-                # self.recent_folders will be the default empty list from __init__
+        if initial_path:
+            self.initialize_project(initial_path)
+        elif session_data["root_path"]:
+            self.initialize_project(session_data["root_path"], add_to_recents=False)
+            for file_path in session_data["open_files"]:
+                if os.path.exists(file_path):
+                    self.open_new_tab(file_path)
+            if 0 <= session_data["active_file_index"] < self.tab_widget.count():
+                self.tab_widget.setCurrentIndex(session_data["active_file_index"])
+            elif self.tab_widget.count() > 0:
+                self.tab_widget.setCurrentIndex(0)
         else:
-            print("LOG: load_session - No session file found.")
-            # self.recent_folders will be the default empty list from __init__
+            # Initial empty tab if no path is provided and no session to load
+            self.open_new_tab() # This will now correctly set initial tab data
 
-        self._show_welcome_page()
-        self._update_recent_menu()
-
+    def initialize_project(self, path: str, add_to_recents: bool = True):
+        """Initializes the project by setting the file explorer root and opening the terminal."""
+        import os
+        if os.path.isdir(path):
+            self.file_explorer.set_root_path(path)
+            self.terminal_widget.start_shell(path)
+            if add_to_recents:
+                self.add_recent_project(path) # Add to recent projects
+        elif os.path.isfile(path):
+            parent_dir = os.path.dirname(path)
+            if parent_dir:
+                self.file_explorer.set_root_path(parent_dir)
+                self.terminal_widget.start_shell(parent_dir)
+                if add_to_recents:
+                    self.add_recent_project(parent_dir) # Add parent directory to recent projects
+            else:
+                # If it's a file in the current working directory with no parent_dir
+                current_dir = os.getcwd()
+                self.file_explorer.set_root_path(current_dir)
+                self.terminal_widget.start_shell(current_dir)
+                if add_to_recents:
+                    self.add_recent_project(current_dir) # Add current directory to recent projects
+            self._open_file_in_new_tab(path)
+        else:
+            print(f"Warning: Provided path is neither a file nor a directory: {path}")
+            # Fallback to default behavior if path is invalid
+            default_path = os.path.expanduser("~")
+            self.file_explorer.set_root_path(default_path)
+            self.terminal_widget.start_shell(default_path)
+            if add_to_recents:
+                self.add_recent_project(default_path) # Add default path to recent projects
+        
     def setup_ui(self):
         # Central Editor View (QTabWidget)
         self.tab_widget = QTabWidget()
@@ -170,6 +116,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tab_widget)
         self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
+        self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions
 
         # File Explorer Panel (Left Sidebar)
         self.file_explorer_dock = QDockWidget("File Explorer", self)
@@ -177,35 +124,62 @@ class MainWindow(QMainWindow):
         self.file_explorer = FileExplorer()
         self.file_explorer_dock.setWidget(self.file_explorer)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
-        self.file_explorer_dock.setVisible(False)
         self.file_explorer.file_opened.connect(self.open_new_tab)
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
 
         # Integrated Terminal Panel (Bottom Dock)
-        self.terminal_dock = QDockWidget("Output", self)
+        self.terminal_dock = QDockWidget("Terminal", self) # Renamed dock title
         self.terminal_dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea)
         
-        # Create a QTabWidget for the bottom dock
-        self.bottom_tab_widget = QTabWidget()
-        self.terminal_dock.setWidget(self.bottom_tab_widget)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
-        self.terminal_dock.setVisible(False)
-
-
-        # Tab 2: Interactive Terminal
+        # Add the new InteractiveTerminal widget directly to the dock
         self.terminal_widget = InteractiveTerminal(self)
-        self.bottom_tab_widget.addTab(self.terminal_widget, "Terminal")
-        
-        # Connect the interactive terminal's command_entered signal
-        # self.terminal_widget.line_entered.connect(self._on_terminal_input) # Removed: New terminal handles input
+        self.terminal_dock.setWidget(self.terminal_widget)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
 
-        # Initial empty tab is no longer opened here. load_session() will handle it.
-        # self.open_new_tab() 
-        
-        # Start shell in home directory on startup
-        self.terminal_widget.start_shell(QStandardPaths.writableLocation(QStandardPaths.HomeLocation))
+    def _open_file_in_new_tab(self, file_path):
+        """Helper method to open a file in a new tab."""
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "File Not Found", f"The file '{file_path}' does not exist.")
+            return
 
+        # Check if the file is already open
+        for i in range(self.tab_widget.count()):
+            editor = self.tab_widget.widget(i)
+            tab_data = self.tab_data_map.get(editor)
+            if tab_data and tab_data.get("path") == file_path:
+                self.tab_widget.setCurrentIndex(i)
+                return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            editor = CodeEditor(self)
+            editor.setPlainText(content)
+            editor.textChanged.connect(self.on_text_editor_changed)
+            editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label(
+                editor.textCursor().blockNumber() + 1,
+                editor.textCursor().columnNumber() + 1
+            ))
+
+            # Determine language based on file extension
+            file_extension = os.path.splitext(file_path)[1].lower()
+            language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
+            editor.set_language(language)
+
+            tab_name = os.path.basename(file_path)
+            new_tab_index = self.tab_widget.addTab(editor, tab_name)
+            self.tab_widget.setCurrentIndex(new_tab_index)
+
+            # Store tab-specific data
+            self.tab_data_map[editor] = {"path": file_path, "is_dirty": False}
+            
+            self.update_editor_read_only_state() # Apply read-only state if in session
+            self.status_bar.showMessage(f"Opened {file_path}", 2000)
+            self._update_undo_redo_actions() # Update undo/redo actions after opening a file
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error Opening File", f"Could not open file {file_path}: {e}")
 
     def setup_menu(self):
         menu_bar = self.menuBar()
@@ -237,18 +211,32 @@ class MainWindow(QMainWindow):
         open_folder_action.triggered.connect(self.open_folder)
         file_menu.addAction(open_folder_action)
 
-        file_menu.addSeparator() # Optional separator
-        self.recent_menu = file_menu.addMenu("Open &Recent")
-        # self.recent_menu will be populated by _update_recent_menu()
-
-        file_menu.addSeparator() # Optional separator before Exit
         exit_action = QAction("&Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+
+        # Recent Projects Submenu
+        self.recent_projects_menu = file_menu.addMenu("Recent Projects")
+        self._update_recent_menu() # Populate it initially
+
         # Edit Menu
         edit_menu = menu_bar.addMenu("&Edit")
+
+        # Undo/Redo Actions
+        self.undo_action = QAction("&Undo", self)
+        self.undo_action.setShortcut("Ctrl+Z")
+        self.undo_action.triggered.connect(self._undo_current_editor)
+        edit_menu.addAction(self.undo_action)
+
+        self.redo_action = QAction("&Redo", self)
+        self.redo_action.setShortcut("Ctrl+Y")
+        self.redo_action.triggered.connect(self._redo_current_editor)
+        edit_menu.addAction(self.redo_action)
+        
+        edit_menu.addSeparator() # Separator for clarity
+
         format_code_action = QAction("&Format Code", self)
         format_code_action.setShortcut("Ctrl+Shift+I")
         format_code_action.triggered.connect(self.format_current_code)
@@ -280,17 +268,54 @@ class MainWindow(QMainWindow):
         session_menu.addAction(self.stop_session_action)
 
     def _update_recent_menu(self):
-        if not hasattr(self, 'recent_menu') or self.recent_menu is None: # Check if recent_menu exists
-            return # Should have been created in setup_menu
+        self.recent_projects_menu.clear()
+        if not self.recent_projects:
+            placeholder_action = QAction("No Recent Projects", self)
+            placeholder_action.setEnabled(False)
+            self.recent_projects_menu.addAction(placeholder_action)
+        else:
+            for project_path in self.recent_projects:
+                action = QAction(project_path, self)
+                action.triggered.connect(lambda checked, path=project_path: self.initialize_project(path))
+                self.recent_projects_menu.addAction(action)
+            self.recent_projects_menu.addSeparator()
+            clear_action = QAction("Clear Recent Projects", self)
+            clear_action.triggered.connect(self._clear_recent_projects)
+            self.recent_projects_menu.addAction(clear_action)
 
-        self.recent_menu.clear()
-        for folder_path in self.recent_folders:
-            action = QAction(folder_path, self)
-            # Corrected lambda to pass the specific path
-            action.triggered.connect(lambda checked=False, path=folder_path: self.open_folder(path))
-            self.recent_menu.addAction(action)
 
-        self.recent_menu.setEnabled(bool(self.recent_folders))
+    def _handle_remove_recent_project(self, path_to_remove):
+        if path_to_remove in self.recent_projects:
+            self.recent_projects.remove(path_to_remove)
+            self._update_recent_menu()
+            if hasattr(self, 'welcome_page') and self.welcome_page:
+                self.welcome_page.update_list(self.recent_projects)
+            self.save_session() # Save the updated session
+
+    def _handle_rename_recent_project(self, old_path):
+        new_path, ok = QInputDialog.getText(self, "Rename Recent Project",
+                                            f"Enter new path for '{old_path}':",
+                                            QLineEdit.Normal, old_path)
+        if ok and new_path:
+            if new_path != old_path:
+                try:
+                    # Attempt to rename the actual folder/file if it exists
+                    if os.path.exists(old_path):
+                        os.rename(old_path, new_path)
+                        QMessageBox.information(self, "Rename Successful", f"Renamed '{old_path}' to '{new_path}'.")
+                    else:
+                        QMessageBox.warning(self, "Path Not Found", f"Original path '{old_path}' does not exist. Updating list only.")
+
+                    # Update in recent projects list
+                    if old_path in self.recent_projects:
+                        index = self.recent_projects.index(old_path)
+                        self.recent_projects[index] = new_path
+                        self._update_recent_menu()
+                        self.save_session() # Save the updated session
+                except OSError as e:
+                    QMessageBox.critical(self, "Rename Error", f"Could not rename: {e}")
+            else:
+                QMessageBox.information(self, "No Change", "New path is the same as the old path. No action taken.")
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
@@ -457,6 +482,9 @@ class MainWindow(QMainWindow):
             if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly():
                 text = current_editor.toPlainText()
                 self.network_manager.send_data('TEXT_UPDATE', text)
+        
+        # Enable/disable undo/redo actions based on editor's state
+        self._update_undo_redo_actions()
 
     @Slot(str)
     def on_network_data_received(self, data):
@@ -476,6 +504,7 @@ class MainWindow(QMainWindow):
                 cursor.setPosition(current_cursor_pos)
                 current_editor.setTextCursor(cursor)
                 self.is_updating_from_network = False
+                self._update_undo_redo_actions() # Update after network change
             except Exception as e:
                 print(f"LOG: MainWindow.on_network_data_received - Error processing received data: {e}")
         print("LOG: MainWindow.on_network_data_received - Exit")
@@ -559,14 +588,6 @@ class MainWindow(QMainWindow):
             return current_widget
         return None
 
-    def _add_to_recent_folders(self, folder_path: str):
-        if folder_path in self.recent_folders:
-            self.recent_folders.remove(folder_path)
-        self.recent_folders.insert(0, folder_path)
-        while len(self.recent_folders) > 10:
-            self.recent_folders.pop()
-        self._update_recent_menu() # This method will be implemented later
-
     # New _handle_run_request method
     @Slot()
     def _handle_run_request(self):
@@ -596,54 +617,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
             return
 
-        # Clear both output panels
-        self.terminal_widget.clear_all()
         self.statusBar().showMessage(f"Executing '{os.path.basename(file_path)}'...")
         
         output_file_no_ext = os.path.splitext(file_path)[0]
-
-        executable = command_template[0]
-        arguments = [part.replace("{file}", file_path).replace("{output_file}", output_file_no_ext) for part in command_template[1:]]
-
-        working_directory = os.path.dirname(file_path)
-
-        # Construct the command string
-        # Ensure file_path and output_file_no_ext are quoted if they contain spaces
-        quoted_file_path = f'"{file_path}"'
-        quoted_output_file_no_ext = f'"{output_file_no_ext}"'
-
-        # Replace placeholders in the command template parts
-        command_parts = [
-            part.replace("{file}", quoted_file_path)
-                .replace("{output_file}", quoted_output_file_no_ext)
-            for part in command_template
-        ]
         
-        # Join parts into a single command string
-        # For C++, the command might be "g++ {file} -o {output_file} && {output_file}"
-        # We need to handle this by potentially splitting if "&&" is present,
-        # or just joining if it's a simple command like "python -u {file}".
-        # For now, let's assume simple joining for commands that don't need chaining in this way
-        # or that the shell itself will handle the '&&' if present in the list.
-        final_command_str = " ".join(command_parts)
-
-        # If working_directory is different from where the shell is currently, cd into it first
-        # This is a simplified approach. A more robust solution might involve checking current shell dir.
-        # For now, we assume the shell started by start_shell is in a known state or CWD is managed by user.
-        # current_shell_dir = self.terminal_widget.get_current_working_directory() # Assuming such a method exists
-        # if working_directory != current_shell_dir:
-        #    final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
-        # else:
-        #    final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
-        # For simplicity, always prepend cd for now, as run_code_command will execute it in the current shell context.
+        # Construct the final command string
+        final_command_str = " ".join(command_template).replace("{file}", f'"{file_path}"').replace("{output_file}", f'"{output_file_no_ext}"')
         
-        # Prepend cd to the command to ensure it runs in the correct directory
-        final_command_str = f"cd \"{working_directory}\" && {final_command_str}"
-
-        print(f"DEBUG: Sending command to terminal: {final_command_str}")
+        # Pass the command to the interactive terminal using the new method
         self.terminal_widget.run_code_command(final_command_str)
-
-        self.bottom_tab_widget.setCurrentWidget(self.terminal_widget) # Switch to interactive terminal
+        
         self.terminal_dock.show()
         self.terminal_dock.raise_()
 
@@ -651,19 +634,17 @@ class MainWindow(QMainWindow):
     def _run_diagnostic_test(self):
         print("--- DEBUG: Starting diagnostic test ---")
         
-        self.terminal_widget.clear_all()
-        # self.terminal_widget.append_output("--- Starting Diagnostic Test ---\n") # append_output removed
-
-        command = "python --version"
-        print(f"DEBUG: Hardcoded command for diagnostic: {command}")
-        # self.terminal_widget.append_output(f"> {command}\n") # append_output removed
-
-        self.terminal_widget.run_code_command(command)
-        self.bottom_tab_widget.setCurrentWidget(self.terminal_widget) # Switch to interactive terminal
-
-    # Removed _on_terminal_input as InteractiveTerminal now handles its input.
-    # Removed _on_process_output, _on_process_error_output, _on_process_finished, _on_process_error
-    # as QProcess is no longer managed by MainWindow directly for terminal operations.
+        # The simplest possible command. This checks if python is in the PATH.
+        executable = "python"
+        arguments = ["--version"] # A command that prints to stdout and exits.
+        
+        print(f"DEBUG: Hardcoded command: {executable} {' '.join(arguments)}")
+        
+        # Pass the command to the interactive terminal
+        self.terminal_widget.run_code_command(f"{executable} {' '.join(arguments)}")
+        
+        self.terminal_dock.show()
+        self.terminal_dock.raise_()
 
     def update_editor_read_only_state(self):
         current_editor = self._get_current_code_editor()
@@ -812,6 +793,7 @@ class MainWindow(QMainWindow):
         editor.control_reclaim_requested.connect(self.on_host_reclaim_control) # Connect new signal
         self._update_status_bar_and_language_selector_on_tab_change(index) # Update status bar immediately for new tab
         self.update_editor_read_only_state() # Apply initial read-only state
+        self._update_undo_redo_actions() # Update undo/redo actions for new tab
 
     @Slot(str)
     def _ai_handle_read_file_request(self, file_path):
@@ -862,27 +844,17 @@ class MainWindow(QMainWindow):
             self.ai_list_directory_result.emit(path, f"Error listing directory {path}: {e}")
             print(f"LOG: _ai_handle_list_directory_request - Error listing directory {path}: {e}")
 
-    def open_folder(self, path=None):
-        self._close_welcome_page_if_open()
-        selected_directory = None
-        if path:
-            selected_directory = path
-        else:
-            dialog = QFileDialog(self)
-            dialog.setFileMode(QFileDialog.Directory)
-            dialog.setOption(QFileDialog.ShowDirsOnly, True)
-            if dialog.exec():
-                selected_directory = dialog.selectedFiles()[0]
-        
-        if selected_directory:
+    def open_folder(self):
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        if dialog.exec():
+            selected_directory = dialog.selectedFiles()[0]
             self.file_explorer.set_root_path(selected_directory)
-            self.file_explorer_dock.setVisible(True)
-            self.terminal_dock.setVisible(True)
-            self._add_to_recent_folders(selected_directory)
-            self.status_bar.showMessage(f"Opened folder: {selected_directory}")
-            # Start shell in the newly opened folder
-            self.terminal_widget.start_shell(selected_directory)
-
+            self.setWindowTitle(f"Aether Editor - {os.path.basename(selected_directory)}")
+            self.terminal_widget.start_shell(selected_directory) # Start shell in new directory
+            self.add_recent_project(selected_directory) # Add to recent projects
+            self.save_session() # Save session after opening folder
 
     def close_tab(self, index=None): # Made index optional as per later definition
         if index is None:
@@ -914,44 +886,24 @@ class MainWindow(QMainWindow):
         
         self.tab_widget.removeTab(index_to_close)
 
-    # Removed create_new_file_action_triggered, open_file_action_triggered, open_folder_action_triggered
-    # as their logic is now incorporated into the main action methods.
-
-    def _close_welcome_page_if_open(self):
-        for i in range(self.tab_widget.count()):
-            widget_at_i = self.tab_widget.widget(i) # Get the widget
-            # Check tab title and optionally widget type for robustness
-            if self.tab_widget.tabText(i) == "Welcome" and isinstance(widget_at_i, WelcomePage):
-                self.close_tab(i)
-                print("LOG: Welcome page closed by _close_welcome_page_if_open.")
-                return # Assuming only one welcome page can be open
 
     def create_new_file(self):
-        self._close_welcome_page_if_open()
         # 1. Context-Aware Path Detection
-        # If file explorer is empty (no root path), default to a known writable location
-        target_directory_default = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-        
-        current_explorer_root = self.file_explorer.model().rootPath() if self.file_explorer.model() and self.file_explorer.model().rootPath() else None
-
-        target_directory = None
         selected_index = self.file_explorer.selectionModel().currentIndex()
+        target_directory = None
 
         if selected_index.isValid():
-            selected_path = self.file_explorer.model().filePath(selected_index) # Use model()
+            selected_path = self.file_explorer.model.filePath(selected_index)
             if os.path.isdir(selected_path):
                 target_directory = selected_path
-            else: 
+            else: # A file is selected
                 target_directory = os.path.dirname(selected_path)
-        elif current_explorer_root: # Nothing selected, but explorer has a root
-             target_directory = current_explorer_root
-        else: # Nothing selected and no root in explorer
-            target_directory = target_directory_default
+        else: # Nothing is selected, default to root path
+            target_directory = self.file_explorer.model.rootPath()
 
-
-        if not target_directory: # Should always have a target_directory by now due to default
-             QMessageBox.critical(self, "Error", "Could not determine target directory for new file. Using Documents.")
-             target_directory = target_directory_default # Fallback just in case
+        if not target_directory:
+            QMessageBox.critical(self, "Error", "Could not determine target directory for new file.")
+            return
 
         # 2. User Input for Filename
         file_name, ok = QInputDialog.getText(self, "New File", "Enter new file name:", QLineEdit.Normal, "")
@@ -983,14 +935,12 @@ class MainWindow(QMainWindow):
     # and already incorporates the self.tab_data_map logic.
 
     def open_file(self):
-        self._close_welcome_page_if_open()
         file_dialog = QFileDialog(self)
         file_dialog.setFileMode(QFileDialog.ExistingFile)
         if file_dialog.exec():
             selected_file = file_dialog.selectedFiles()[0]
+            self.initialize_project(selected_file) # Initialize project with the selected file
             self.open_new_tab(selected_file)
-            self.file_explorer_dock.setVisible(True)
-            self.terminal_dock.setVisible(True)
 
     def save_current_file(self):
         current_index = self.tab_widget.currentIndex()
@@ -1176,9 +1126,147 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Formatting is only supported for Python files (.py).")
 
 
+    def save_session(self):
+        session_data = {}
+        try:
+            root_path = self.file_explorer.model.rootPath() # Get root path from QFileSystemModel
+            open_files = []
+            for i in range(self.tab_widget.count()):
+                editor = self.tab_widget.widget(i)
+                if isinstance(editor, CodeEditor):
+                    tab_data = self.tab_data_map.get(editor) # Get tab data from map
+                    if tab_data and tab_data.get("path") and os.path.exists(tab_data.get("path")):
+                        open_files.append(tab_data.get("path"))
+            
+            active_file_index = self.tab_widget.currentIndex()
+            
+            session_data = {
+                "root_path": root_path,
+                "open_files": open_files,
+                "active_file_index": active_file_index,
+                "recent_projects": self.recent_projects # Save recent projects
+            }
+            
+            config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+            session_dir = os.path.join(config_dir, ".aether_editor")
+            os.makedirs(session_dir, exist_ok=True)
+            session_file = os.path.join(session_dir, "session.json")
+            
+            with open(session_file, 'w') as f:
+                json.dump(session_data, f, indent=4)
+            print(f"LOG: Session saved to {session_file}. Content: {session_data}")
+        except Exception as e:
+            print(f"LOG: save_session - Error saving session: {e}")
+
+    def load_session(self):
+        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        session_dir = os.path.join(config_dir, ".aether_editor")
+        session_file = os.path.join(session_dir, "session.json")
+        
+        session_data = {"root_path": None, "open_files": [], "active_file_index": 0, "recent_projects": []} # Default empty session
+
+        if os.path.exists(session_file):
+            try:
+                with open(session_file, 'r') as f:
+                    loaded_data = json.load(f)
+                    session_data["root_path"] = loaded_data.get("root_path")
+                    session_data["open_files"] = loaded_data.get("open_files", [])
+                    session_data["active_file_index"] = loaded_data.get("active_file_index", 0)
+                    session_data["recent_projects"] = loaded_data.get("recent_projects", [])
+                print(f"LOG: Session loaded from {session_file}. Content: {session_data}")
+            except Exception as e:
+                print(f"LOG: load_session - Error loading session: {e}")
+        return session_data
+
+    def add_recent_project(self, path: str):
+        if path not in self.recent_projects:
+            self.recent_projects.insert(0, path) # Add to the beginning
+            self.recent_projects = self.recent_projects[:10] # Keep only the last 10
+            self._update_recent_menu()
+            self.save_session() # Persist changes
+        else:
+            # If the path is already in recent_projects, move it to the front
+            self.recent_projects.remove(path)
+            self.recent_projects.insert(0, path)
+            self._update_recent_menu()
+            self.save_session() # Save updated recent projects
+
+    def _show_welcome_page(self):
+        from welcome_screen import WelcomeScreen # Import here to avoid circular dependency
+        # Close existing welcome tab if open
+        for i in range(self.tab_widget.count()):
+            if isinstance(self.tab_widget.widget(i), WelcomeScreen):
+                self.tab_widget.removeTab(i)
+                break
+
+        self.welcome_page = WelcomeScreen(recent_projects=self.recent_projects)
+        self.welcome_page.path_selected.connect(self.initialize_project)
+        self.welcome_page.recent_projects_changed.connect(self._update_recent_projects_from_welcome)
+        self.welcome_page.clear_recents_requested.connect(self._perform_clear_recent_projects_logic)
+        self.welcome_page.rename_recent_requested.connect(self._rename_recent_project)
+        self.welcome_page.remove_recent_requested.connect(self._remove_recent_project)
+
+        index = self.tab_widget.addTab(self.welcome_page, "Welcome")
+        self.tab_widget.setCurrentIndex(index)
+        self.tab_widget.setTabEnabled(index, False) # Make welcome tab non-closable
+        self.tab_widget.setTabButton(index, QTabWidget.RightSide, None) # Remove close button
+
+    @Slot(list)
+    def _update_recent_projects_from_welcome(self, updated_list):
+        self.recent_projects = updated_list
+        self._update_recent_menu()
+        self.save_session()
+
+    @Slot()
+    def _clear_recent_projects(self):
+        # Step 1: Display the confirmation dialog
+        reply = QMessageBox.question(self,
+                                     "Confirm Clear",
+                                     "Are you sure you want to clear all recent projects?",
+                                     QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.No)
+
+        # Step 2: Act based on the user's response
+        if reply == QMessageBox.Yes:
+            # This is where the existing clearing logic goes:
+            self.recent_projects.clear()
+            self._update_recent_menu()
+            if hasattr(self, 'welcome_page') and self.welcome_page:
+                self.welcome_page.update_list(self.recent_projects)
+            self.statusBar().showMessage("Recent projects list cleared.", 3000)
+            self.save_session() # Save the updated session
+        else:
+            # If user clicks "No" or closes the dialog, do nothing.
+            self.statusBar().showMessage("Clear operation cancelled.", 3000)
+
+    @Slot(str)
+    def _rename_recent_project(self, old_path: str):
+        new_path = QFileDialog.getExistingDirectory(self, "Select New Folder for Project")
+        if new_path and new_path != old_path:
+            if old_path in self.recent_projects:
+                self.recent_projects.remove(old_path)
+            if new_path not in self.recent_projects:
+                self.recent_projects.insert(0, new_path) # Add to the beginning
+                self.recent_projects = self.recent_projects[:10] # Keep only the last 10
+                self._update_recent_menu()
+                self.save_session()
+                if hasattr(self, 'welcome_page') and self.welcome_page:
+                    self.welcome_page.update_list(self.recent_projects)
+
+    @Slot(str)
+    def _remove_recent_project(self, path_to_remove: str):
+        if QMessageBox.question(self, "Remove Recent Project",
+                                f"Are you sure you want to remove '{os.path.basename(path_to_remove)}' from the list?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            if path_to_remove in self.recent_projects:
+                self.recent_projects.remove(path_to_remove)
+                self._update_recent_menu()
+                self.save_session()
+                if hasattr(self, 'welcome_page') and self.welcome_page:
+                    self.welcome_page.update_list(self.recent_projects)
+
     def closeEvent(self, event):
-        # Session saving is no longer handled by MainWindow directly.
-        # AppController might handle it, or it's removed from the current scope.
+        self.save_session() # Save session on close
         unsaved_changes_exist = False
         for i in range(self.tab_widget.count()):
             editor = self.tab_widget.widget(i)
@@ -1218,7 +1306,7 @@ class MainWindow(QMainWindow):
                     self.tab_widget.setCurrentIndex(original_current_index)
         
         # Only save the session and accept the close event if all saves were successful or discarded
-        self.save_session() # Re-added
+        self.save_session()
         event.accept()
 
     @Slot(QPoint)
@@ -1339,5 +1427,29 @@ class MainWindow(QMainWindow):
             current_editor.setPlainText(new_code)
             current_editor._is_programmatic_change = False
             self.status_bar.showMessage("AI Assistant applied code changes.")
+            self._update_undo_redo_actions() # Update undo/redo actions after AI edit
         else:
             self.status_bar.showMessage("AI Assistant tried to edit, but no active editor found.")
+
+    def _undo_current_editor(self):
+        current_editor = self._get_current_code_editor()
+        if current_editor and current_editor.document().isUndoAvailable():
+            current_editor.undo()
+            self._update_undo_redo_actions()
+
+    def _redo_current_editor(self):
+        current_editor = self._get_current_code_editor()
+        if current_editor and current_editor.document().isRedoAvailable():
+            current_editor.redo()
+            self._update_undo_redo_actions()
+
+    def _update_undo_redo_actions(self):
+        current_editor = self._get_current_code_editor()
+        if current_editor:
+            self.undo_action.setEnabled(current_editor.document().isUndoAvailable())
+            self.redo_action.setEnabled(current_editor.document().isRedoAvailable())
+        else:
+            self.undo_action.setEnabled(False)
+            self.redo_action.setEnabled(False)
+
+
