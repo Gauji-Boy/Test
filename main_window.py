@@ -1232,7 +1232,6 @@ class MainWindow(QMainWindow):
 
 
     def save_session(self):
-    def save_session(self):
         if not self.session_manager: # Might be called during early shutdown
             return
 
