@@ -39,37 +39,35 @@ class AIController(QObject):
         # Connect AI Window signal for API key availability
         self.ai_window.api_key_available.connect(self._initialize_agent_with_key)
 
-        print("AIController: Initialized. Waiting for API key if not already set.")
+        print("LOG: AIController - __init__ complete. Signals connected. Waiting for API key.")
 
     def _initialize_agent_with_key(self, api_key: str):
-        print(f"AIController: Received api_key_available signal. Initializing GeminiAgent...")
+        print(f"LOG: AIController - _initialize_agent_with_key called with API key: '{api_key[:10]}...'")
         if self.ai_agent: # If an old agent exists, clean it up (optional, depends on desired behavior)
-            print("AIController: Disconnecting signals from old AI agent...")
+            print("LOG: AIController - Disconnecting signals from old AI agent...")
             try:
                 self.ai_agent.new_ai_message.disconnect(self._handle_ai_message_received)
                 self.ai_agent.tool_call_requested.disconnect(self._handle_tool_call_requested)
                 self.ai_agent.error_occurred.disconnect(self._handle_error_occurred)
             except RuntimeError as e: # Signals might not be connected if agent init failed previously
-                 print(f"AIController: Error disconnecting signals (might be normal if agent wasn't fully up): {e}")
+                 print(f"LOG: AIController - Error disconnecting signals (might be normal if agent wasn't fully up): {e}")
             self.ai_agent.deleteLater() # Schedule for deletion
 
         self.ai_agent = GeminiAgent(api_key=api_key, parent=self)
+        print(f"LOG: AIController - GeminiAgent instance created: {self.ai_agent}")
 
         # Connect signals from the newly created agent
         self.ai_agent.new_ai_message.connect(self._handle_ai_message_received)
         self.ai_agent.tool_call_requested.connect(self._handle_tool_call_requested)
         self.ai_agent.error_occurred.connect(self._handle_error_occurred)
+        print("LOG: AIController - GeminiAgent signals connected.")
 
-        # Check if agent initialized successfully (e.g., API key was valid)
-        if self.ai_agent.api_key_is_valid: # Assuming GeminiAgent sets a flag like this
+        if self.ai_agent.api_key_is_valid:
             self.ai_window.add_message_to_history("System", "AI Agent initialized successfully and is ready.")
-            print("AIController: GeminiAgent initialized successfully.")
+            print("LOG: AIController - GeminiAgent initialized successfully (api_key_is_valid is true).")
         else:
-            # Error should have been emitted by GeminiAgent already and handled by _handle_error_occurred
-            # which would display it in the AI window.
-            # We might not need an additional message here, or make it more generic.
             self.ai_window.add_message_to_history("System", "AI Agent initialization failed. Check API key or logs.")
-            print("AIController: GeminiAgent initialization failed (api_key_is_valid is false).")
+            print("LOG: AIController - GeminiAgent initialization failed (api_key_is_valid is false).")
 
 
     def show_window(self):
@@ -83,13 +81,13 @@ class AIController(QObject):
         Handles user message submission from the AI window.
         Displays it and sends it to the AI agent.
         """
-        if not self.ai_agent or not self.ai_agent.api_key_is_valid: # Check api_key_is_valid on agent
+        print(f"LOG: AIController - _handle_user_message received: '{message[:100]}...'")
+        if not self.ai_agent or not self.ai_agent.api_key_is_valid:
             self.ai_window.add_message_to_history("Error", "AI Agent not initialized or API key invalid. Please set API Key via 'API Key Settings'.")
-            print("AIController: Attempted to send message but AI agent not ready.")
+            print("LOG: AIController - Agent not ready or key invalid.")
             return
 
-        print(f"AIController: User message received: '{message[:50]}...'")
-        # self.ai_window.add_message_to_history("User", message) # User message already added by UI in its _on_send_button_clicked
+        print("LOG: AIController - Calling self.ai_agent.send_message")
         self.ai_agent.send_message(message)
 
     @Slot(str)
@@ -97,18 +95,16 @@ class AIController(QObject):
         """
         Handles new AI message from the agent and displays it in the UI.
         """
-        print(f"AIController: AI message received: '{response[:50]}...'")
-        self.ai_window.display_ai_response(response) # Use the specific method from AIAssistantWindow
+        print(f"LOG: AIController - _handle_ai_message_received: '{response[:100]}...'")
+        self.ai_window.display_ai_response(response)
 
     @Slot(str, dict)
     def _handle_tool_call_requested(self, tool_name: str, tool_params: dict):
         """
         Handles a tool call request from the AI agent.
-        (Placeholder: logs and displays in UI. Actual execution will be more complex).
         """
-        print(f"AIController: Tool call requested: {tool_name} with params {tool_params}")
+        print(f"LOG: AIController - _handle_tool_call_requested: {tool_name}, Params: {tool_params}")
 
-        # Display in UI
         tool_call_message = f"Attempting to use tool: {tool_name}(params={tool_params})"
         self.ai_window.add_message_to_history("System", tool_call_message)
 
@@ -153,7 +149,7 @@ class AIController(QObject):
         """
         Handles an error signal from the AI agent and displays it.
         """
-        print(f"AIController: Error received: {error_message}")
+        print(f"LOG: AIController - _handle_error_occurred: '{error_message[:200]}...'")
         self.ai_window.add_message_to_history("Error", error_message)
 
 

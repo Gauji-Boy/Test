@@ -177,6 +177,7 @@ class AIAssistantWindow(QDialog):
         """
         user_message = self.user_input_lineedit.text().strip()
         if user_message:
+            print(f"LOG: AIAssistantWindow - Emitting user_message_submitted with: '{user_message[:100]}...'")
             self.user_message_submitted.emit(user_message)
             self.add_message_to_history("You", user_message) # Display user's message
             self.user_input_lineedit.clear()

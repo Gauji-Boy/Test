@@ -35,21 +35,29 @@ class GeminiAgentWorker(QRunnable):
     """
     def __init__(self, chat_session, user_message_text: str = None, tool_response_part=None):
         super().__init__()
+        print(f"LOG: GeminiAgentWorker - __init__ called. User message: '{str(user_message_text)[:100]}...', Tool part: {tool_response_part}")
         self.signals = GeminiAgentWorkerSignals()
         self.chat_session = chat_session
         self.user_message_text = user_message_text
         self.tool_response_part = tool_response_part
 
     def run(self):
+        print("LOG: GeminiAgentWorker - run method started.")
         try:
+            response = None # Ensure response is defined
             if self.tool_response_part:
-                print(f"GeminiAgentWorker: Sending tool response to Gemini: {self.tool_response_part}")
+                print(f"LOG: GeminiAgentWorker - Sending tool response part: {self.tool_response_part}")
+                print("LOG: GeminiAgentWorker - About to call chat_session.send_message (with tool response)")
                 response = self.chat_session.send_message(self.tool_response_part)
+                print(f"LOG: GeminiAgentWorker - Raw API response received (after tool response): {response}")
             elif self.user_message_text:
-                print(f"GeminiAgentWorker: Sending user message to Gemini: '{self.user_message_text[:50]}...'")
+                print(f"LOG: GeminiAgentWorker - Sending user message: '{self.user_message_text[:100]}...'")
+                print("LOG: GeminiAgentWorker - About to call chat_session.send_message (with user message)")
                 response = self.chat_session.send_message(self.user_message_text)
+                print(f"LOG: GeminiAgentWorker - Raw API response received (after user message): {response}")
             else:
                 self.signals.error_occurred.emit("GeminiAgentWorker: Started without user message or tool response.")
+                print("LOG: GeminiAgentWorker - ERROR: Worker started without user message or tool response.")
                 return
 
             # Check for tool calls (as per Gemini API structure for function calling)
@@ -64,35 +72,26 @@ class GeminiAgentWorker(QRunnable):
                     if hasattr(part, 'function_call') and part.function_call and part.function_call.name:
                         function_call = part.function_call
                         tool_name = function_call.name
-                        # Convert FunctionCall.Args (which is a MapComposite) to a Python dict
                         tool_params = {key: value for key, value in function_call.args.items()}
-
+                        print(f"LOG: GeminiAgentWorker - Emitting tool_call_requested. Name: {tool_name}, Params: {tool_params}")
                         self.signals.tool_call_requested.emit(tool_name, tool_params)
-                        print(f"GeminiAgentWorker: Emitted tool_call_requested for '{tool_name}'")
                         emitted_tool_call = True
-                        break # Assuming one tool call per response part for now
+                        break
 
-            # If there was a tool call, the model might also have explanatory text.
-            # Or if no tool call, then it's a direct text response.
-            # The response.text attribute usually contains the textual part of the response.
-            if response.text:
-                self.signals.new_message_received.emit(response.text)
-                print(f"GeminiAgentWorker: Emitted new_message_received with text: {response.text[:50]}...")
+            if hasattr(response, 'text') and response.text:
+                response_text = response.text # Ensure response_text is defined
+                print(f"LOG: GeminiAgentWorker - Emitting new_message_received with text: '{response_text[:100]}...'")
+                self.signals.new_message_received.emit(response_text)
             elif not emitted_tool_call:
-                # This case might happen if there's no text and no tool call, which is unusual.
-                # Or if the model only returns a tool call without any accompanying text part.
-                print("GeminiAgentWorker: Response had no text and no tool call was emitted.")
-                # Optionally, emit an empty message or a specific signal if this state needs handling.
-                # self.signals.new_message_received.emit("") # Or handle as an error/unexpected response
+                print("LOG: GeminiAgentWorker - Response had no text and no tool call was emitted.")
 
-            print("GeminiAgentWorker: Finished processing.")
+            print("LOG: GeminiAgentWorker - run method finished processing.")
 
         except Exception as e:
-            # More specific error handling for API errors is good.
-            # For example, google.api_core.exceptions.GoogleAPIError or specific genai errors
-            error_msg = f"GeminiAgentWorker: API Error: {str(e)}"
-            print(error_msg) # Log the error
-            self.signals.error_occurred.emit(error_msg)
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"LOG: GeminiAgentWorker - ERROR during run: {error_detail}")
+            self.signals.error_occurred.emit(f"Error in AI communication: {str(e)}")
 
 
 class GeminiAgent(QObject):
@@ -106,46 +105,46 @@ class GeminiAgent(QObject):
 
     def __init__(self, api_key: str, model_name="gemini-1.5-flash-latest", parent=None):
         super().__init__(parent)
+        print(f"LOG: GeminiAgent - __init__ called with API key: '{api_key[:10]}...'")
         self.model_name = model_name
-        self.chat_history = []  # Stores {'role': 'user'/'model', 'parts': [content]}
-                                # Content can be text or function call/response parts
+        self.chat_history = []
         self.model = None
         self.chat_session = None
-        self.api_key_is_valid = False # Flag to track API key validity
+        self.api_key_is_valid = False
 
         if not api_key:
             msg = "API key is missing. GeminiAgent cannot be initialized."
-            print(f"GeminiAgent: {msg}")
-            self.error_occurred.emit(msg) # Emit error if key is missing
-            # self.model and self.chat_session will remain None
+            print(f"LOG: GeminiAgent - {msg}")
+            self.error_occurred.emit(msg)
         else:
             try:
+                print("LOG: GeminiAgent - Calling genai.configure")
                 genai.configure(api_key=api_key)
-                # TODO: Add tool function declarations here eventually
-                # from ai_tools_specs import tool_declarations # Example
-                # self.model = genai.GenerativeModel(
-                #     self.model_name,
-                #     generation_config=DEFAULT_GENERATION_CONFIG,
-                #     safety_settings=DEFAULT_SAFETY_SETTINGS,
-                #     tools=tool_declarations # Pass tool declarations here
-                # )
+                print("LOG: GeminiAgent - genai.configure successful.")
+
+                print(f"LOG: GeminiAgent - Initializing model: {self.model_name}")
                 self.model = genai.GenerativeModel(
                     self.model_name,
                     generation_config=DEFAULT_GENERATION_CONFIG,
                     safety_settings=DEFAULT_SAFETY_SETTINGS
-                    # tools will be added later if function calling is fully implemented
                 )
+                print(f"LOG: GeminiAgent - Model initialized: {self.model}")
+
+                print("LOG: GeminiAgent - Starting chat session.")
                 self.chat_session = self.model.start_chat(history=self.get_formatted_history())
-                self.api_key_is_valid = True # Assume valid if no immediate error
-                print(f"GeminiAgent: Initialized and configured GenerativeModel with {self.model_name}")
+                print(f"LOG: GeminiAgent - Chat session started: {self.chat_session}")
+
+                self.api_key_is_valid = True
+                print("LOG: GeminiAgent - Initialization successful.")
             except Exception as e:
-                error_msg = f"GeminiAgent: Error initializing GenerativeModel or configuring API key: {e}"
-                print(error_msg)
-                self.error_occurred.emit(error_msg)
-                # self.model and self.chat_session might be None or partially initialized
+                self.api_key_is_valid = False
+                import traceback
+                error_detail = f"{str(e)}\n{traceback.format_exc()}"
+                print(f"LOG: GeminiAgent - ERROR during __init__: {error_detail}")
+                self.error_occurred.emit(f"Gemini Agent initialization failed: {str(e)}")
 
         self.thread_pool = QThreadPool()
-        print(f"GeminiAgent: QThreadPool max threads: {self.thread_pool.maxThreadCount()}")
+        print(f"LOG: GeminiAgent - QThreadPool max threads: {self.thread_pool.maxThreadCount()}")
 
     def get_formatted_history(self):
         """Returns the chat history in the format expected by the Gemini API."""
@@ -158,52 +157,32 @@ class GeminiAgent(QObject):
         """
         Sends a user's message to the Gemini model via a worker thread.
         """
+        print(f"LOG: GeminiAgent - send_message called with: '{user_text[:100]}...'")
         if not self.model or not self.chat_session or not self.api_key_is_valid:
             error_msg = "Gemini model/chat session not initialized or API key invalid. Cannot send message."
             self.error_occurred.emit(error_msg)
-            print(f"GeminiAgent: {error_msg}")
+            print(f"LOG: GeminiAgent - ERROR in send_message: {error_msg}")
             return
 
-        # Add user message to history before sending
-        # Ensure history is compatible with what model.start_chat() and chat.send_message() expect
         self.chat_history.append({'role': 'user', 'parts': [{'text': user_text}]})
-        # The chat_session should maintain its own history internally after being started.
-        # Re-starting chat with updated history for every turn:
-        # self.chat_session = self.model.start_chat(history=self.get_formatted_history())
-        # For now, let's assume the existing self.chat_session updates its history.
-        # If issues arise, explicitly managing history by restarting chat might be needed.
+        print(f"LOG: GeminiAgent - Added user message to history. Current history length for next call: {len(self.chat_history)}")
 
-        print(f"GeminiAgent: Added user message to history. Current history length for next call: {len(self.chat_history)}")
-
-        # Pass the current chat session and the user's text to the worker
         worker = GeminiAgentWorker(chat_session=self.chat_session, user_message_text=user_text)
+        print(f"LOG: GeminiAgent - Starting GeminiAgentWorker: {worker}")
 
-        # Connect worker signals to agent's forwarding signals or internal slots
-        worker.signals.new_message_received.connect(self._handle_ai_response) # Connect to the correct handler
-        worker.signals.tool_call_requested.connect(self._handle_tool_call_request) # Renamed for clarity
-        worker.signals.error_occurred.connect(self.error_occurred) # Forward directly
+        worker.signals.new_message_received.connect(self._handle_ai_response)
+        worker.signals.tool_call_requested.connect(self._handle_tool_call_request)
+        worker.signals.error_occurred.connect(self.error_occurred)
 
         self.thread_pool.start(worker)
-        print(f"GeminiAgent: Started GeminiAgentWorker for user message: '{user_text[:50]}...'")
 
-    def _handle_ai_response(self, ai_text: str):
+    def _handle_ai_response(self, ai_text: str): # This handler is for text part of model's response
         """Handles new message from AI, adds to history, and emits signal."""
         self.chat_history.append({'role': 'model', 'parts': [{'text': ai_text}]})
         self.new_ai_message.emit(ai_text)
-        print(f"GeminiAgent: AI response processed. History length: {len(self.chat_history)}")
+        print(f"LOG: GeminiAgent - AI text response processed and added to history. History length: {len(self.chat_history)}")
 
-    def _handle_tool_call_request(self, tool_name: str, tool_args: dict):
-        """Handles tool call request from AI and emits signal."""
-        # The Gemini API expects the history to be an alternating sequence.
-        # If the AI made a function call, the 'model' role part will contain that function_call.
-        # We must not add that textual representation to history if it's already part of the structured call.
-        # The worker now sends response.text, which should be the textual part.
-        # If a tool call also occurred, that's handled by _handle_tool_call_request.
-        self.chat_history.append({'role': 'model', 'parts': [{'text': ai_text}]})
-        self.new_ai_message.emit(ai_text)
-        print(f"GeminiAgent: AI text response processed. History length: {len(self.chat_history)}")
-
-    def _handle_tool_call_request(self, tool_name: str, tool_args: dict):
+    def _handle_tool_call_request(self, tool_name: str, tool_args: dict): # This handler is for function_call part
         """Handles tool call request from AI, adds to history, and emits signal."""
         # Add the model's function call to history.
         # This is important so the model knows it made a call.
