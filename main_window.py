@@ -343,11 +343,6 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.request_control_button)
         self.request_control_button.setEnabled(False) # Initially disabled
 
-        # New Test Runner Button for diagnostic purposes
-        self.test_runner_button = QPushButton("Test Runner", self)
-        self.test_runner_button.clicked.connect(self._run_diagnostic_test)
-        toolbar.addWidget(self.test_runner_button)
-
         # AI Assistant Button
         self.ai_assistant_button = QPushButton("AI Assistant", self)
         # Optionally, set an icon if available:

@@ -19,21 +19,21 @@ class SessionManager(QObject):
         os.makedirs(session_dir, exist_ok=True)
         return os.path.join(session_dir, self.session_file_name)
 
-    @Slot(dict, list, str, int)
-    def save_session(self, open_files_data, recent_projects, root_path, active_file_index):
+    @Slot(dict, list, str, str)
+    def save_session(self, open_files_data, recent_projects, root_path, active_file_path: str):
         """
         Saves the session data to session.json.
         open_files_data: Data from FileManager.get_all_open_files_data()
                          It's a dict like {path: {"is_dirty": bool, "content_hash": int}}
         recent_projects: List of recent project paths.
         root_path: Current root path of the file explorer.
-        active_file_index: Index of the currently active tab/file.
+        active_file_path: Path of the currently active file/tab.
         """
         session_data_to_save = {
             "open_files_data": open_files_data, # This now stores hashes and dirty flags
             "recent_projects": recent_projects,
             "root_path": root_path,
-            "active_file_index": active_file_index
+            "active_file_path": active_file_path
         }
 
         session_file_path = self._get_session_file_path()
@@ -63,18 +63,22 @@ class SessionManager(QObject):
             "open_files_data": {},
             "recent_projects": [],
             "root_path": None,
-            "active_file_index": 0
+            "active_file_path": None # Changed from active_file_index: 0
         }
 
         if os.path.exists(session_file_path):
             try:
                 with open(session_file_path, 'r', encoding='utf-8') as f:
                     loaded_data = json.load(f)
+
+                # Ensure active_file_path is part of the loaded_data, default to None if not.
+                # If old "active_file_index" exists, it's ignored in favor of "active_file_path".
+                if "active_file_path" not in loaded_data:
+                    loaded_data["active_file_path"] = None
+
                 # print(f"SessionManager: Session loaded from {session_file_path}. Content: {loaded_data}")
-                # Validate or migrate data structure if necessary in future versions
-                # For now, assume the structure is as expected.
                 self.session_loaded.emit(loaded_data)
-                return loaded_data # Also return for direct use if needed by caller immediately
+                return loaded_data
             except json.JSONDecodeError as e:
                 error_msg = f"Error decoding session file {session_file_path}: {e}. Using default session."
                 # print(f"SessionManager: {error_msg}")
