@@ -18,7 +18,7 @@ class AppController:
         self.welcome_screen.rename_recent_requested.connect(self.main_window._handle_rename_recent_project)
         self.welcome_screen.remove_recent_requested.connect(self.main_window._handle_remove_recent_project)
         # Connect the join session requested signal
-        self.welcome_screen.welcome_page.join_session_requested.connect(self.launch_for_join_session)
+        self.welcome_screen.join_session_requested.connect(self.launch_for_join_session)
 
     def run(self):
         self.welcome_screen.show()
