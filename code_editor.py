@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QPlainTextEdit, QCompleter, QApplication, QTextEdit
+from PySide6.QtWidgets import QPlainTextEdit, QCompleter, QApplication, QTextEdit, QMainWindow
 from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QKeyEvent, QFont, QSyntaxHighlighter
 from PySide6.QtCore import Qt, QTimer, QStringListModel, QRect, QRegularExpression, QFileInfo, Signal, Slot
 import json
@@ -29,7 +29,6 @@ class CodeEditor(QPlainTextEdit):
         self.thread_pool = QThreadPool.globalInstance() # Get global thread pool
         self.setup_linter()
         self.setup_completer()
-
         self.PAIRS = {
             '(': ')',
             '[': ']',
@@ -44,8 +43,17 @@ class CodeEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self._emit_cursor_position)
         self._is_programmatic_change = False # Master control flag
         # Defer connection to allow parent object to be fully initialized
-        QTimer.singleShot(0, lambda: self.undoStack().undoAvailable.connect(self.parent()._update_undo_redo_actions))
-        QTimer.singleShot(0, lambda: self.undoStack().redoAvailable.connect(self.parent()._update_undo_redo_actions))
+        QTimer.singleShot(0, lambda: self.document().undoAvailable.connect(self._get_main_window_parent()._update_undo_redo_actions))
+        QTimer.singleShot(0, lambda: self.document().redoAvailable.connect(self._get_main_window_parent()._update_undo_redo_actions))
+
+    def _get_main_window_parent(self):
+        """Traverses up the parent hierarchy to find the MainWindow instance."""
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, QMainWindow):
+                return parent
+            parent = parent.parent()
+        return None # Should not happen in a well-structured application
 
     def _load_theme_config(self):
         print("LOG: CodeEditor._load_theme_config - Entry")
