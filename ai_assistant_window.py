@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit, QPushButton, QInputDialog
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QTimer # Added QTimer
 from PySide6.QtGui import QIcon # For optional icon setting
 
 # Assuming config_manager.py is in the same directory or accessible in PYTHONPATH
@@ -95,7 +95,9 @@ class AIAssistantWindow(QDialog):
             # Optional: Clear specific "set key" messages if you have a way to identify them.
             # For now, new valid messages will just appear after this.
             self.add_message_to_history("System", "API Key is set. Ready to chat.")
-            self.api_key_available.emit(self.current_api_key)
+            # Emit the signal via QTimer.singleShot to ensure the caller (AIController)
+            # has finished its own __init__ and connected the slot.
+            QTimer.singleShot(0, lambda: self.api_key_available.emit(self.current_api_key))
         else:
             self.user_input_lineedit.setEnabled(False)
             self.send_button.setEnabled(False)
