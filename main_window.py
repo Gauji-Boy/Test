@@ -814,7 +814,7 @@ class MainWindow(QMainWindow):
 
         file_extension = os.path.splitext(path)[1].lower()
         language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
-        editor.set_language(language)
+        editor.set_file_path_and_update_language(path)
 
         tab_name = os.path.basename(path)
         new_tab_index = self.tab_widget.addTab(editor, tab_name)
