@@ -43,7 +43,16 @@ class MainWindow(QMainWindow):
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
         self.update_ui_for_control_state() # Initial UI update
+
+        # Initialize active editor undo stack reference
+        self._active_editor_undo_stack = None
         
+        # Disable undo/redo actions initially (will be enabled by tab change if editor is valid)
+        if hasattr(self, 'undo_action'): # Check if setup_menu has been called
+            self.undo_action.setEnabled(False)
+        if hasattr(self, 'redo_action'):
+            self.redo_action.setEnabled(False)
+
         # Load session data at startup
         session_data = self.load_session()
         self.recent_projects = session_data.get("recent_projects", [])
@@ -398,8 +407,31 @@ class MainWindow(QMainWindow):
     }
 
     def _update_status_bar_and_language_selector_on_tab_change(self, index):
+        # Disconnect from previous editor's undo stack signals if any
+        if self._active_editor_undo_stack:
+            try:
+                self._active_editor_undo_stack.canUndoChanged.disconnect(self.undo_action.setEnabled)
+            except RuntimeError: # Signal was not connected or object deleted
+                pass 
+            try:
+                self._active_editor_undo_stack.canRedoChanged.disconnect(self.redo_action.setEnabled)
+            except RuntimeError: # Signal was not connected or object deleted
+                pass
+            self._active_editor_undo_stack = None # Clear the reference
+
         editor = self.tab_widget.widget(index)
+        print(f"LOG: _update_status_bar_and_language_selector_on_tab_change - Type of editor: {type(editor)}")
         if isinstance(editor, CodeEditor):
+            print(f"LOG: _update_status_bar_and_language_selector_on_tab_change - editor is CodeEditor instance.")
+            self._active_editor_undo_stack = editor.undoStack() # Store the new stack
+
+            self._active_editor_undo_stack.canUndoChanged.connect(self.undo_action.setEnabled)
+            self._active_editor_undo_stack.canRedoChanged.connect(self.redo_action.setEnabled)
+            
+            # Immediately update state
+            self.undo_action.setEnabled(editor.document().isUndoAvailable())
+            self.redo_action.setEnabled(editor.document().isRedoAvailable())
+
             # Update status bar labels
             self.language_label.setText(f"Language: {editor.current_language}")
             self._update_cursor_position_label(editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1)
@@ -428,6 +460,11 @@ class MainWindow(QMainWindow):
                 elif self.language_selector.count() > 0:
                     self.language_selector.setCurrentIndex(0)
         else:
+            # Not a CodeEditor tab, or no editor
+            self.undo_action.setEnabled(False)
+            self.redo_action.setEnabled(False)
+            self._active_editor_undo_stack = None # Ensure it's cleared
+
             self.language_label.setText("Language: N/A")
             self.cursor_pos_label.setText("Ln 1, Col 1")
             default_idx = self.language_selector.findText("Plain Text")
@@ -1352,15 +1389,21 @@ class MainWindow(QMainWindow):
         current_editor = self._get_current_code_editor()
         if current_editor and current_editor.document().isUndoAvailable():
             current_editor.undo()
-            self._update_undo_redo_actions()
+            # self._update_undo_redo_actions() # REMOVED - signal from QUndoStack handles this
 
     def _redo_current_editor(self):
         current_editor = self._get_current_code_editor()
         if current_editor and current_editor.document().isRedoAvailable():
             current_editor.redo()
-            self._update_undo_redo_actions()
+            # self._update_undo_redo_actions() # REMOVED - signal from QUndoStack handles this
 
     def _update_undo_redo_actions(self):
+        # This method is kept for manual refresh if needed by other parts of the UI,
+        # e.g., after a programmatic change that might not reliably trigger document signals,
+        # or when a tab is opened/closed.
+        # The primary update mechanism for undo/redo actions during typing/editing
+        # is now the direct connection to QUndoStack signals in 
+        # _update_status_bar_and_language_selector_on_tab_change.
         current_editor = self._get_current_code_editor()
         if current_editor:
             self.undo_action.setEnabled(current_editor.document().isUndoAvailable())

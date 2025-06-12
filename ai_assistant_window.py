@@ -75,7 +75,7 @@ class AIAssistantWindow(QDialog):
     }
     p { /* Added paragraph styling */
         margin-top: 0px;
-        margin-bottom: 8px;
+        margin-bottom: 8px; 
     }
     code { /* Styling for inline code */
         background-color: #1e1e1e;
@@ -87,7 +87,7 @@ class AIAssistantWindow(QDialog):
     }
     /* This is the styling for the Pygments code block (div.highlight > pre) */
     /* Pygments usually wraps in <div class="highlight"><pre>...</pre></div> */
-    div.highlight {
+    div.highlight { 
         background: #1e1e1e; /* Background for the div container */
         padding: 10px;
         border-radius: 5px;
@@ -134,7 +134,7 @@ class AIAssistantWindow(QDialog):
         self.send_button.setIcon(QIcon.fromTheme("mail-send")) # Example icon
         self.send_button.clicked.connect(self._on_send_button_clicked)
         self.input_layout.addWidget(self.send_button)
-
+        
         # API Key Button
         self.api_key_button = QPushButton("API Key Settings", self)
         self.api_key_button.setIcon(QIcon.fromTheme("configure")) # Example icon
@@ -143,7 +143,7 @@ class AIAssistantWindow(QDialog):
 
         self.main_layout.addLayout(self.input_layout) # Add the horizontal layout to the main vertical layout
         self.setLayout(self.main_layout)
-
+        
         self.config_manager = ConfigManager()
         self.current_api_key = None # Initialize attribute
 
@@ -171,17 +171,17 @@ class AIAssistantWindow(QDialog):
 
     def _simulate_prompt_for_api_key(self):
         # This method simulates the outcome of _prompt_for_api_key_slot for testing
-        api_key = "TEST_API_KEY_FOR_LOGGING"
+        api_key = "TEST_API_KEY_FOR_LOGGING" 
         ok = True
         print(f"LOG_SIMULATE: Simulating API key entry in _simulate_prompt_for_api_key with: {api_key}")
-
+        
         # Duplicating logic from _prompt_for_api_key_slot but without QInputDialog
         if ok and api_key: # 'ok' is true from simulation
             self.config_manager.save_api_key(api_key)
             self.add_message_to_history("System", "API Key saved successfully (Simulated).")
             self._on_key_updated() # This will update UI and emit api_key_available
         elif ok and not api_key:
-            self.config_manager.save_api_key("")
+            self.config_manager.save_api_key("") 
             self.add_message_to_history("System", "API Key cleared (Simulated).")
             self._on_key_updated()
         else:
@@ -199,34 +199,34 @@ class AIAssistantWindow(QDialog):
 
     def _prompt_for_api_key_slot(self):
         # --- TEMPORARILY MODIFIED FOR TESTING ---
-        # api_key, ok = QInputDialog.getText(...)
+        # api_key, ok = QInputDialog.getText(...) 
         # Simulate 'ok' and a test key
-        # api_key = "TEST_API_KEY_FOR_LOGGING"
+        # api_key = "TEST_API_KEY_FOR_LOGGING" 
         # ok = True
         # print(f"LOG_SIMULATE: (Original _prompt_for_api_key_slot) Simulating API key entry with: {api_key}")
         # This direct simulation within the original slot is less clean than using a separate simulation path.
         # Reverting to standard behavior and using the _simulate_api_key_and_send_message path.
         # --- END TEMPORARY MODIFICATION ---
 
-        current_api_key = self.config_manager.load_api_key()
+        current_api_key = self.config_manager.load_api_key() 
         api_key, ok = QInputDialog.getText(
             self,
             "API Key",
             "Enter your Google Gemini API Key:",
-            QLineEdit.EchoMode.Password,
-            current_api_key if current_api_key else ""
+            QLineEdit.EchoMode.Password, 
+            current_api_key if current_api_key else "" 
         )
         print(f"LOG: AIAssistantWindow - _prompt_for_api_key_slot: User provided API key, ok={ok}") # Added log
         if ok and api_key:
             self.config_manager.save_api_key(api_key)
-            self.add_message_to_history("System", "API Key saved successfully.")
-            self._on_key_updated()
+            self.add_message_to_history("System", "API Key saved successfully.") 
+            self._on_key_updated() 
         elif ok and not api_key:
-            self.config_manager.save_api_key("")
+            self.config_manager.save_api_key("") 
             self.add_message_to_history("System", "API Key cleared.")
             self._on_key_updated()
         else:
-            self.add_message_to_history("System", "API Key setup cancelled.")
+            self.add_message_to_history("System", "API Key setup cancelled.") 
 
     def _on_key_updated(self):
         self.current_api_key = self.config_manager.load_api_key()
@@ -275,7 +275,7 @@ class AIAssistantWindow(QDialog):
         Includes detailed logging and error handling for the rendering process.
         """
         print(f"LOG: display_ai_response - Raw AI response received: '{response[:200]}...'")
-
+        
         formatted_html = "" # Ensure formatted_html is defined
         try:
             # Ensure render_markdown is available (it would be the dummy if import failed)
@@ -290,7 +290,7 @@ class AIAssistantWindow(QDialog):
                 formatted_html = f"<p><b>AI Assistant (Render Setup Error):</b></p><pre>{html.escape(response)}</pre><p><small>Error: Markdown rendering function is not available.</small></p>"
             else:
                 formatted_html = render_markdown(response) # Call the (potentially dummy) render_markdown
-
+                
         except Exception as e:
             import traceback
             import html # Ensure html is imported for fallback
@@ -302,11 +302,11 @@ class AIAssistantWindow(QDialog):
                 f"<pre>{html.escape(response)}</pre>"
                 f"<p><small>Error details: {html.escape(str(e))}</small></p>"
             )
-
+        
         print(f"LOG: display_ai_response - Formatted HTML (or fallback): '{formatted_html[:300]}...'")
-
+        
         # Construct final HTML to append
-        final_html_output = f"<p><b>AI Assistant:</b></p>{formatted_html}"
+        final_html_output = f"<p><b>AI Assistant:</b></p>{formatted_html}" 
         # For consistency, the current final_html_output is fine.
 
         print("LOG: display_ai_response - About to append to chat_history_browser.")

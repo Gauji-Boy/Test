@@ -35,10 +35,10 @@ class AIController(QObject):
         # self.ai_agent.new_ai_message.connect(self._handle_ai_message_received)
         # self.ai_agent.tool_call_requested.connect(self._handle_tool_call_requested)
         # self.ai_agent.error_occurred.connect(self._handle_error_occurred)
-
+        
         # Connect AI Window signal for API key availability
         self.ai_window.api_key_available.connect(self._initialize_agent_with_key)
-
+        
         print("LOG: AIController - __init__ complete. Signals connected. Waiting for API key.")
 
     def _initialize_agent_with_key(self, api_key: str):
@@ -55,14 +55,14 @@ class AIController(QObject):
 
         self.ai_agent = GeminiAgent(api_key=api_key, parent=self)
         print(f"LOG: AIController - GeminiAgent instance created: {self.ai_agent}")
-
+        
         # Connect signals from the newly created agent
         self.ai_agent.new_ai_message.connect(self._handle_ai_message_received)
         self.ai_agent.tool_call_requested.connect(self._handle_tool_call_requested)
         self.ai_agent.error_occurred.connect(self._handle_error_occurred)
         print("LOG: AIController - GeminiAgent signals connected.")
-
-        if self.ai_agent.api_key_is_valid:
+        
+        if self.ai_agent.api_key_is_valid: 
             self.ai_window.add_message_to_history("System", "AI Agent initialized successfully and is ready.")
             print("LOG: AIController - GeminiAgent initialized successfully (api_key_is_valid is true).")
         else:
@@ -82,11 +82,11 @@ class AIController(QObject):
         Displays it and sends it to the AI agent.
         """
         print(f"LOG: AIController - _handle_user_message received: '{message[:100]}...'")
-        if not self.ai_agent or not self.ai_agent.api_key_is_valid:
+        if not self.ai_agent or not self.ai_agent.api_key_is_valid: 
             self.ai_window.add_message_to_history("Error", "AI Agent not initialized or API key invalid. Please set API Key via 'API Key Settings'.")
             print("LOG: AIController - Agent not ready or key invalid.")
             return
-
+            
         print("LOG: AIController - Calling self.ai_agent.send_message")
         self.ai_agent.send_message(message)
 
@@ -104,7 +104,7 @@ class AIController(QObject):
         Handles a tool call request from the AI agent.
         """
         print(f"LOG: AIController - _handle_tool_call_requested: {tool_name}, Params: {tool_params}")
-
+        
         tool_call_message = f"Attempting to use tool: {tool_name}(params={tool_params})"
         self.ai_window.add_message_to_history("System", tool_call_message)
 
@@ -114,8 +114,8 @@ class AIController(QObject):
                 # Note: The placeholder tools currently don't use MainWindow.
                 # If they needed it, self.main_window would be passed.
                 result = tool_function(**tool_params)
-
-                result_display_message = f"Tool '{tool_name}' executed successfully."
+                
+                result_display_message = f"Tool '{tool_name}' executed successfully." 
                 # Avoid printing full result if it's very long or complex for the chat UI
                 if isinstance(result, (str, int, float, bool)) or (isinstance(result, dict) and len(str(result)) < 100):
                     result_display_message += f" Result: {result}"
@@ -124,7 +124,7 @@ class AIController(QObject):
 
                 self.ai_window.add_message_to_history("System", result_display_message)
                 print(f"AIController: Tool '{tool_name}' executed. Result: {result}")
-
+                
                 if self.ai_agent:
                     # The agent's add_tool_response_to_history and send_tool_response will handle history and next step.
                     self.ai_agent.send_tool_response(tool_name, result, is_error=False)
@@ -136,7 +136,7 @@ class AIController(QObject):
                 print(f"AIController: {error_msg}")
                 if self.ai_agent:
                     self.ai_agent.send_tool_response(tool_name, {"error": error_msg}, is_error=True)
-
+              
         except Exception as e:
             error_msg = f"Error executing tool '{tool_name}': {str(e)}"
             self.ai_window.add_message_to_history("Error", error_msg)
@@ -179,7 +179,7 @@ if __name__ == '__main__':
 
     # Simulate tool call
     # controller.ai_agent.tool_call_requested.emit("read_file", {"file_path": "test.txt"})
-
+    
     # Simulate error
     # controller.ai_agent.error_occurred.emit("This is a test error from the agent.")
 

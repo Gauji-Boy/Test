@@ -63,7 +63,7 @@ class GeminiAgentWorker(QRunnable):
             # Check for tool calls (as per Gemini API structure for function calling)
             # A response can have text AND a function call.
             # The model might say "Okay, I'll use the tool X" and then provide the function_call part.
-
+            
             emitted_tool_call = False
             if response.candidates and \
                response.candidates[0].content and \
@@ -76,13 +76,13 @@ class GeminiAgentWorker(QRunnable):
                         print(f"LOG: GeminiAgentWorker - Emitting tool_call_requested. Name: {tool_name}, Params: {tool_params}")
                         self.signals.tool_call_requested.emit(tool_name, tool_params)
                         emitted_tool_call = True
-                        break
+                        break 
 
             if hasattr(response, 'text') and response.text:
                 response_text = response.text # Ensure response_text is defined
                 print(f"LOG: GeminiAgentWorker - Emitting new_message_received with text: '{response_text[:100]}...'")
                 self.signals.new_message_received.emit(response_text)
-            elif not emitted_tool_call:
+            elif not emitted_tool_call: 
                 print("LOG: GeminiAgentWorker - Response had no text and no tool call was emitted.")
 
             print("LOG: GeminiAgentWorker - run method finished processing.")
@@ -110,7 +110,7 @@ class GeminiAgent(QObject):
         self.chat_history = []
         self.model = None
         self.chat_session = None
-        self.api_key_is_valid = False
+        self.api_key_is_valid = False 
 
         if not api_key:
             msg = "API key is missing. GeminiAgent cannot be initialized."
@@ -121,7 +121,7 @@ class GeminiAgent(QObject):
                 print("LOG: GeminiAgent - Calling genai.configure")
                 genai.configure(api_key=api_key)
                 print("LOG: GeminiAgent - genai.configure successful.")
-
+                
                 print(f"LOG: GeminiAgent - Initializing model: {self.model_name}")
                 self.model = genai.GenerativeModel(
                     self.model_name,
@@ -129,11 +129,11 @@ class GeminiAgent(QObject):
                     safety_settings=DEFAULT_SAFETY_SETTINGS
                 )
                 print(f"LOG: GeminiAgent - Model initialized: {self.model}")
-
+                
                 print("LOG: GeminiAgent - Starting chat session.")
                 self.chat_session = self.model.start_chat(history=self.get_formatted_history())
                 print(f"LOG: GeminiAgent - Chat session started: {self.chat_session}")
-
+                
                 self.api_key_is_valid = True
                 print("LOG: GeminiAgent - Initialization successful.")
             except Exception as e:
@@ -166,13 +166,13 @@ class GeminiAgent(QObject):
 
         self.chat_history.append({'role': 'user', 'parts': [{'text': user_text}]})
         print(f"LOG: GeminiAgent - Added user message to history. Current history length for next call: {len(self.chat_history)}")
-
+        
         worker = GeminiAgentWorker(chat_session=self.chat_session, user_message_text=user_text)
         print(f"LOG: GeminiAgent - Starting GeminiAgentWorker: {worker}")
 
         worker.signals.new_message_received.connect(self._handle_ai_response)
-        worker.signals.tool_call_requested.connect(self._handle_tool_call_request)
-        worker.signals.error_occurred.connect(self.error_occurred)
+        worker.signals.tool_call_requested.connect(self._handle_tool_call_request) 
+        worker.signals.error_occurred.connect(self.error_occurred) 
 
         self.thread_pool.start(worker)
 
@@ -255,7 +255,7 @@ class GeminiAgent(QObject):
                 response=response_content_dict
             )
         )
-
+        
         # Add this part to history before sending. The role is 'user' for function responses.
         self.chat_history.append({'role': 'user', 'parts': [tool_response_part_to_send.to_dict()]}) # Store the dict representation
         print(f"GeminiAgent: Added tool response for '{tool_name}' to history. History length: {len(self.chat_history)}")
@@ -264,7 +264,7 @@ class GeminiAgent(QObject):
         # The worker will send this tool_response_part and get the AI's next message.
         worker = GeminiAgentWorker(chat_session=self.chat_session,
                                      tool_response_part=tool_response_part_to_send)
-
+        
         # Connect signals for this specific worker instance
         worker.signals.new_message_received.connect(self._handle_ai_response)
         worker.signals.tool_call_requested.connect(self._handle_tool_call_request)
@@ -282,7 +282,7 @@ if __name__ == '__main__':
     # This test requires a GOOGLE_API_KEY environment variable to be set.
     # Example: export GOOGLE_API_KEY="YOUR_API_KEY"
     # Or pass it directly for testing if you modify the GeminiAgent call below.
-
+    
     google_api_key = os.getenv("GOOGLE_API_KEY")
     if not google_api_key:
         print("Error: GOOGLE_API_KEY environment variable not set. Skipping GeminiAgent test.")
