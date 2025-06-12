@@ -6,6 +6,7 @@ class WelcomePage(QWidget):
     new_file_requested = Signal()
     open_file_requested = Signal()
     open_folder_requested = Signal()
+    join_session_requested = Signal()  # Added new signal
     recent_path_selected = Signal(str)
 
     def __init__(self, recent_folders, parent=None):
@@ -51,9 +52,16 @@ class WelcomePage(QWidget):
         self.open_folder_button.setMinimumWidth(250)
         self.open_folder_button.setFont(font)
 
+        # Join Session Button
+        self.join_session_button = QPushButton("Join Session...") # Added new button
+        self.join_session_button.setMinimumHeight(45)
+        self.join_session_button.setMinimumWidth(250)
+        self.join_session_button.setFont(font)
+
         buttons_v_layout.addWidget(self.new_file_button)
         buttons_v_layout.addWidget(self.open_file_button)
         buttons_v_layout.addWidget(self.open_folder_button)
+        buttons_v_layout.addWidget(self.join_session_button) # Added new button to layout
 
         main_layout.addLayout(buttons_v_layout)
 
@@ -79,6 +87,7 @@ class WelcomePage(QWidget):
         self.new_file_button.clicked.connect(self.new_file_requested.emit)
         self.open_file_button.clicked.connect(self.open_file_requested.emit)
         self.open_folder_button.clicked.connect(self.open_folder_requested.emit)
+        self.join_session_button.clicked.connect(self.join_session_requested.emit) # Connected new signal
         self.recent_list_widget.itemDoubleClicked.connect(self._on_recent_item_doubled_clicked)
 
     @Slot(QListWidgetItem)
@@ -102,6 +111,7 @@ if __name__ == '__main__':
     welcome_widget.new_file_requested.connect(lambda: print("New File Requested"))
     welcome_widget.open_file_requested.connect(lambda: print("Open File Requested"))
     welcome_widget.open_folder_requested.connect(lambda: print("Open Folder Requested"))
+    welcome_widget.join_session_requested.connect(lambda: print("Join Session Requested")) # Added for testing
     welcome_widget.recent_path_selected.connect(lambda path: print(f"Recent Path Selected: {path}"))
 
     sys.exit(app.exec())

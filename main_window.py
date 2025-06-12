@@ -70,13 +70,36 @@ class MainWindow(QMainWindow):
                 self.tab_widget.setCurrentIndex(0)
         else:
             # Initial empty tab if no path is provided and no session to load
-            self.open_new_tab() # This will now correctly set initial tab data
+            # Check if this is part of a "join session" flow, which might not need an initial tab here
+            # For now, let's assume open_new_tab() is okay, or initialize_project(None) handles it.
+            # self.open_new_tab() # This will now correctly set initial tab data
+            # If started with no initial_path and no session, it could be a join attempt or fresh start.
+            # The welcome screen or direct "join session" action will handle this.
+            # If neither, then perhaps an empty tab is desired.
+            # For now, let's defer tab opening to specific actions like new file or join session.
+            pass
+
 
     def initialize_project(self, path: str, add_to_recents: bool = True):
         """Initializes the project by setting the file explorer root and opening the terminal."""
+        if path is None:
+            # This is a client-only startup.
+            # Open a single, empty "Untitled" tab.
+            self.open_new_tab() # Use open_new_tab which handles None path
+            # Hide the file explorer as there is no project context.
+            if hasattr(self, 'file_explorer_dock'): # Check if file_explorer_dock exists
+                self.file_explorer_dock.setVisible(False)
+            return # Stop further processing
+
         import os
         if os.path.isdir(path):
             self.file_explorer.set_root_path(path)
+            # Ensure file explorer is visible if it was hidden
+            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
+                self.file_explorer_dock.setVisible(True)
+            # Ensure file explorer is visible
+            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
+                self.file_explorer_dock.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
                 self.add_recent_project(path) # Add to recent projects
@@ -84,6 +107,9 @@ class MainWindow(QMainWindow):
             parent_dir = os.path.dirname(path)
             if parent_dir:
                 self.file_explorer.set_root_path(parent_dir)
+                # Ensure file explorer is visible
+                if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
+                    self.file_explorer_dock.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
                     self.add_recent_project(parent_dir) # Add parent directory to recent projects
@@ -91,15 +117,21 @@ class MainWindow(QMainWindow):
                 # If it's a file in the current working directory with no parent_dir
                 current_dir = os.getcwd()
                 self.file_explorer.set_root_path(current_dir)
+                # Ensure file explorer is visible
+                if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
+                    self.file_explorer_dock.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
                     self.add_recent_project(current_dir) # Add current directory to recent projects
-            self._open_file_in_new_tab(path)
+            self.open_new_tab(path) # Use open_new_tab which handles file opening
         else:
             print(f"Warning: Provided path is neither a file nor a directory: {path}")
             # Fallback to default behavior if path is invalid
             default_path = os.path.expanduser("~")
             self.file_explorer.set_root_path(default_path)
+            # Ensure file explorer is visible
+            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
+                self.file_explorer_dock.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
                 self.add_recent_project(default_path) # Add default path to recent projects
@@ -472,6 +504,13 @@ class MainWindow(QMainWindow):
                 self.language_selector.setCurrentIndex(default_idx)
             elif self.language_selector.count() > 0:
                 self.language_selector.setCurrentIndex(0)
+
+    @Slot()
+    def join_session_from_welcome_page(self):
+        """Public slot to initiate joining a session from the welcome page."""
+        self.connect_to_host_session()
+        # After attempting to connect, initialize_project(None) will set up the client-only UI
+        self.initialize_project(None)
 
     @Slot()
     def on_text_editor_changed(self):
@@ -1407,10 +1446,13 @@ class MainWindow(QMainWindow):
         # _update_status_bar_and_language_selector_on_tab_change.
         current_editor = self._get_current_code_editor()
         if current_editor:
-            self.undo_action.setEnabled(current_editor.document().isUndoAvailable())
-            self.redo_action.setEnabled(current_editor.document().isRedoAvailable())
+            # Ensure undo_action and redo_action exist before trying to setEnabled
+            if hasattr(self, 'undo_action'):
+                self.undo_action.setEnabled(current_editor.document().isUndoAvailable())
+            if hasattr(self, 'redo_action'):
+                self.redo_action.setEnabled(current_editor.document().isRedoAvailable())
         else:
-            self.undo_action.setEnabled(False)
-            self.redo_action.setEnabled(False)
-
-
+            if hasattr(self, 'undo_action'):
+                self.undo_action.setEnabled(False)
+            if hasattr(self, 'redo_action'):
+                self.redo_action.setEnabled(False)

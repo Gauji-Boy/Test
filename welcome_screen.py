@@ -11,6 +11,7 @@ class WelcomeScreen(QWidget):
     clear_recents_requested = Signal()
     rename_recent_requested = Signal(str)
     remove_recent_requested = Signal(str)
+    join_session_requested = Signal() # Added new signal
 
     def __init__(self, recent_projects=None):
         super().__init__()
@@ -54,6 +55,10 @@ class WelcomeScreen(QWidget):
         open_file_button.clicked.connect(self._open_file_dialog)
         button_layout.addWidget(open_file_button)
 
+        join_session_button = QPushButton("Join Session...")
+        join_session_button.setFixedSize(150, 40) # Match styling
+        join_session_button.clicked.connect(self.join_session_requested.emit) # Connect signal
+        button_layout.addWidget(join_session_button) # Add to layout
 
         main_layout.addLayout(button_layout)
 
