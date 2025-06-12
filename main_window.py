@@ -6,8 +6,7 @@ from code_editor import CodeEditor
 from interactive_terminal import InteractiveTerminal # Import the new interactive terminal
 from network_manager import NetworkManager # Import NetworkManager
 from connection_dialog import ConnectionDialog # Import ConnectionDialog
-from ai_assistant_window import AIAssistantWindow # Import the AI Assistant Window
-from ai_tools import AITools # Import AITools
+from ai_controller import AIController # Import AIController
 import tempfile
 import os
 import sys
@@ -16,12 +15,6 @@ import json # Import json for structured messages
 import black # Import black for synchronous formatting
 
 class MainWindow(QMainWindow):
-    # Signals for AI Tools to get results back from MainWindow
-    ai_get_current_code_result = Signal(str)
-    ai_read_file_result = Signal(str, str) # file_path, content/error_message
-    ai_write_file_result = Signal(str, bool, str) # file_path, success, message
-    ai_list_directory_result = Signal(str, str) # path, json_string_of_contents/error_message
-
     def __init__(self, initial_path=None):
         super().__init__()
         self.setWindowTitle("Aether Editor")
@@ -36,13 +29,6 @@ class MainWindow(QMainWindow):
         self.is_updating_from_network = False # Flag to prevent echo loop
 
         self.network_manager = NetworkManager(self) # Initialize NetworkManager
-        self.ai_tools = AITools(self) # Initialize AITools
-
-        # Connect AITools signals to MainWindow slots for execution
-        self.ai_tools.get_current_code_signal.connect(self._ai_handle_get_current_code_request)
-        self.ai_tools.read_file_signal.connect(self._ai_handle_read_file_request)
-        self.ai_tools.write_file_signal.connect(self._ai_handle_write_file_request)
-        self.ai_tools.list_directory_signal.connect(self._ai_handle_list_directory_request)
 
         # State variables for collaborative editing
         self.is_host = False
@@ -57,7 +43,16 @@ class MainWindow(QMainWindow):
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
         self.update_ui_for_control_state() # Initial UI update
+
+        # Initialize active editor undo stack reference
+        self._active_editor_undo_stack = None
         
+        # Disable undo/redo actions initially (will be enabled by tab change if editor is valid)
+        if hasattr(self, 'undo_action'): # Check if setup_menu has been called
+            self.undo_action.setEnabled(False)
+        if hasattr(self, 'redo_action'):
+            self.redo_action.setEnabled(False)
+
         # Load session data at startup
         session_data = self.load_session()
         self.recent_projects = session_data.get("recent_projects", [])
@@ -345,16 +340,17 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.request_control_button)
         self.request_control_button.setEnabled(False) # Initially disabled
 
-        # AI Assistant Button
-        self.ai_assistant_button = QPushButton("AI Assistant", self)
-        self.ai_assistant_button.setIcon(QIcon.fromTheme("accessories-text-editor")) # Placeholder icon
-        self.ai_assistant_button.clicked.connect(self.open_ai_assistant)
-        toolbar.addWidget(self.ai_assistant_button)
-
         # New Test Runner Button for diagnostic purposes
         self.test_runner_button = QPushButton("Test Runner", self)
         self.test_runner_button.clicked.connect(self._run_diagnostic_test)
         toolbar.addWidget(self.test_runner_button)
+
+        # AI Assistant Button
+        self.ai_assistant_button = QPushButton("AI Assistant", self)
+        # Optionally, set an icon if available:
+        # self.ai_assistant_button.setIcon(QIcon.fromTheme("accessories-text-editor"))
+        self.ai_assistant_button.clicked.connect(self.open_new_ai_assistant)
+        toolbar.addWidget(self.ai_assistant_button)
 
         # Add a permanent widget to the status bar for role/control status
         self.control_status_label = QLabel("Not in session")
@@ -411,8 +407,31 @@ class MainWindow(QMainWindow):
     }
 
     def _update_status_bar_and_language_selector_on_tab_change(self, index):
+        # Disconnect from previous editor's undo stack signals if any
+        # Disconnect from previous editor's document signals if any
+        if hasattr(self, '_active_editor_document') and self._active_editor_document:
+            try:
+                self._active_editor_document.undoAvailable.disconnect(self.undo_action.setEnabled)
+            except RuntimeError: # Signal was not connected or object deleted
+                pass
+            try:
+                self._active_editor_document.redoAvailable.disconnect(self.redo_action.setEnabled)
+            except RuntimeError: # Signal was not connected or object deleted
+                pass
+            self._active_editor_document = None # Clear the reference
+
         editor = self.tab_widget.widget(index)
         if isinstance(editor, CodeEditor):
+            self._active_editor_document = editor.document()
+
+            self._active_editor_document.undoAvailable.connect(self.undo_action.setEnabled)
+            self._active_editor_document.redoAvailable.connect(self.redo_action.setEnabled)
+            
+            # Immediately update state
+            self.undo_action.setEnabled(self._active_editor_document.isUndoAvailable())
+            self.redo_action.setEnabled(self._active_editor_document.isRedoAvailable())
+            self.redo_action.setEnabled(editor.document().isRedoAvailable())
+
             # Update status bar labels
             self.language_label.setText(f"Language: {editor.current_language}")
             self._update_cursor_position_label(editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1)
@@ -441,6 +460,11 @@ class MainWindow(QMainWindow):
                 elif self.language_selector.count() > 0:
                     self.language_selector.setCurrentIndex(0)
         else:
+            # Not a CodeEditor tab, or no editor
+            self.undo_action.setEnabled(False)
+            self.redo_action.setEnabled(False)
+            self._active_editor_undo_stack = None # Ensure it's cleared
+
             self.language_label.setText("Language: N/A")
             self.cursor_pos_label.setText("Ln 1, Col 1")
             default_idx = self.language_selector.findText("Plain Text")
@@ -736,18 +760,6 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("You have reclaimed editing control.")
             print(f"LOG: on_host_reclaim_control - is_host={self.is_host}, has_control={self.has_control}")
 
-    @Slot()
-    def _ai_handle_get_current_code_request(self):
-        """Handles requests from AITools to get the current code in the active editor."""
-        current_editor = self._get_current_code_editor()
-        if current_editor:
-            code = current_editor.toPlainText()
-            self.ai_get_current_code_result.emit(code)
-            print("LOG: _ai_handle_get_current_code_request - Emitted current code.")
-        else:
-            self.ai_get_current_code_result.emit("") # Emit empty string if no editor
-            print("LOG: _ai_handle_get_current_code_request - No active editor, emitted empty string.")
-
     def open_new_tab(self, file_path=None):
         editor = CodeEditor(self)
         tab_title = "Untitled"
@@ -794,55 +806,6 @@ class MainWindow(QMainWindow):
         self._update_status_bar_and_language_selector_on_tab_change(index) # Update status bar immediately for new tab
         self.update_editor_read_only_state() # Apply initial read-only state
         self._update_undo_redo_actions() # Update undo/redo actions for new tab
-
-    @Slot(str)
-    def _ai_handle_read_file_request(self, file_path):
-        """Handles requests from AITools to read a file."""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            self.ai_read_file_result.emit(file_path, content)
-            print(f"LOG: _ai_handle_read_file_request - Read file: {file_path}")
-        except FileNotFoundError:
-            self.ai_read_file_result.emit(file_path, f"Error: File not found at {file_path}")
-            print(f"LOG: _ai_handle_read_file_request - File not found: {file_path}")
-        except Exception as e:
-            self.ai_read_file_result.emit(file_path, f"Error reading file {file_path}: {e}")
-            print(f"LOG: _ai_handle_read_file_request - Error reading file {file_path}: {e}")
-
-    @Slot(str, str)
-    def _ai_handle_write_file_request(self, file_path, content):
-        """Handles requests from AITools to write content to a file."""
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            self.ai_write_file_result.emit(file_path, True, "File written successfully.")
-            print(f"LOG: _ai_handle_write_file_request - Wrote to file: {file_path}")
-        except Exception as e:
-            self.ai_write_file_result.emit(file_path, False, f"Error writing to file {file_path}: {e}")
-            print(f"LOG: _ai_handle_write_file_request - Error writing to file {file_path}: {e}")
-
-    @Slot(str)
-    def _ai_handle_list_directory_request(self, path):
-        """Handles requests from AITools to list directory contents."""
-        try:
-            contents = []
-            for item in os.listdir(path):
-                full_path = os.path.join(path, item)
-                if os.path.isdir(full_path):
-                    contents.append({"name": item, "type": "directory"})
-                else:
-                    contents.append({"name": item, "type": "file"})
-            self.ai_list_directory_result.emit(path, json.dumps(contents))
-            print(f"LOG: _ai_handle_list_directory_request - Listed directory: {path}")
-        except FileNotFoundError:
-            self.ai_list_directory_result.emit(path, f"Error: Directory not found at {path}")
-            print(f"LOG: _ai_handle_list_directory_request - Directory not found: {path}")
-        except Exception as e:
-            self.ai_list_directory_result.emit(path, f"Error listing directory {path}: {e}")
-            print(f"LOG: _ai_handle_list_directory_request - Error listing directory {path}: {e}")
 
     def open_folder(self):
         dialog = QFileDialog(self)
@@ -1096,6 +1059,7 @@ class MainWindow(QMainWindow):
         if file_path and file_path.lower().endswith(".py"):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             self.statusBar().showMessage("Formatting code...")
+            original_text = current_editor.toPlainText() # Store original text before formatting
             try:
                 formatted_text = black.format_str(code_text, mode=black.FileMode())
                 current_editor.setPlainText(formatted_text) # This will trigger on_text_editor_changed
@@ -1407,43 +1371,40 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Delete Error", f"An unexpected error occurred while deleting '{name_to_delete}': {e}")
 
-    @Slot()
-    def open_ai_assistant(self):
-        """
-        Opens the AI Assistant window.
-        """
-        self.ai_assistant_window = AIAssistantWindow(self) # Pass self (MainWindow instance)
-        self.ai_assistant_window.show()
-
-    @Slot(str)
-    def apply_ai_code_edit(self, new_code):
-        """
-        Slot to receive code edits from the AI assistant and apply them to the current editor.
-        """
-        current_editor = self._get_current_code_editor()
-        if current_editor:
-            # Set the flag to prevent network echo
-            current_editor._is_programmatic_change = True
-            current_editor.setPlainText(new_code)
-            current_editor._is_programmatic_change = False
-            self.status_bar.showMessage("AI Assistant applied code changes.")
-            self._update_undo_redo_actions() # Update undo/redo actions after AI edit
-        else:
-            self.status_bar.showMessage("AI Assistant tried to edit, but no active editor found.")
+    def open_new_ai_assistant(self):
+        # Store the controller instance as a member of MainWindow
+        # to keep it alive as long as the AI window is open.
+        # If the AI window is modal, this might not be strictly necessary,
+        # but it's safer if the window can be non-modal.
+        # For simplicity, let's create a new one each time,
+        # assuming the AI window/controller handles its own lifecycle once shown.
+        # If issues arise with premature GC, we can revisit storing it as self.ai_controller.
+        ai_controller = AIController(main_window=self)
+        ai_controller.show_window()
+        # To prevent the AIController instance from being garbage collected immediately
+        # if show_window() is non-blocking and the AI window is not modal,
+        # we might need to store it. A simple way for now if the window is a dialog:
+        self._current_ai_controller = ai_controller
 
     def _undo_current_editor(self):
         current_editor = self._get_current_code_editor()
         if current_editor and current_editor.document().isUndoAvailable():
             current_editor.undo()
-            self._update_undo_redo_actions()
+            # self._update_undo_redo_actions() # REMOVED - signal from QUndoStack handles this
 
     def _redo_current_editor(self):
         current_editor = self._get_current_code_editor()
         if current_editor and current_editor.document().isRedoAvailable():
             current_editor.redo()
-            self._update_undo_redo_actions()
+            # self._update_undo_redo_actions() # REMOVED - signal from QUndoStack handles this
 
     def _update_undo_redo_actions(self):
+        # This method is kept for manual refresh if needed by other parts of the UI,
+        # e.g., after a programmatic change that might not reliably trigger document signals,
+        # or when a tab is opened/closed.
+        # The primary update mechanism for undo/redo actions during typing/editing
+        # is now the direct connection to QUndoStack signals in 
+        # _update_status_bar_and_language_selector_on_tab_change.
         current_editor = self._get_current_code_editor()
         if current_editor:
             self.undo_action.setEnabled(current_editor.document().isUndoAvailable())

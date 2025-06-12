@@ -43,8 +43,8 @@ class CodeEditor(QPlainTextEdit):
         self.textChanged.connect(self._update_language_and_highlighting)
         self.cursorPositionChanged.connect(self._emit_cursor_position)
         self._is_programmatic_change = False # Master control flag
-        self.document().undoStack().undoAvailable.connect(self.parent()._update_undo_redo_actions)
-        self.document().undoStack().redoAvailable.connect(self.parent()._update_undo_redo_actions)
+        
+        # Undo/redo signal connections are now managed by MainWindow based on active tab
 
     def _load_theme_config(self):
         print("LOG: CodeEditor._load_theme_config - Entry")
