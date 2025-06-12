@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QPlainTextEdit, QCompleter, QApplication, QTextEdit
-from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QKeyEvent, QFont, QSyntaxHighlighter, QUndoStack, QUndoCommand
+from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QKeyEvent, QFont, QSyntaxHighlighter
 from PySide6.QtCore import Qt, QTimer, QStringListModel, QRect, QRegularExpression, QFileInfo, Signal, Slot
 import json
 import os
@@ -43,8 +43,7 @@ class CodeEditor(QPlainTextEdit):
         self.textChanged.connect(self._update_language_and_highlighting)
         self.cursorPositionChanged.connect(self._emit_cursor_position)
         self._is_programmatic_change = False # Master control flag
-        
-        self._undo_stack = QUndoStack(self) # Initialize the undo stack
+
         # Undo/redo signal connections are now managed by MainWindow based on active tab
 
     def _load_theme_config(self):
@@ -345,7 +344,3 @@ class CodeEditor(QPlainTextEdit):
         # If none of the special cases are handled, call the default handler
         super().keyPressEvent(event)
         print("LOG: CodeEditor.keyPressEvent - Default handler, Exit")
-
-    def undoStack(self):
-        """Exposes the internal QUndoStack for external connections."""
-        return self._undo_stack

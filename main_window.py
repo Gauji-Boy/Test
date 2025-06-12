@@ -412,7 +412,7 @@ class MainWindow(QMainWindow):
             try:
                 self._active_editor_undo_stack.canUndoChanged.disconnect(self.undo_action.setEnabled)
             except RuntimeError: # Signal was not connected or object deleted
-                pass 
+                pass
             try:
                 self._active_editor_undo_stack.canRedoChanged.disconnect(self.redo_action.setEnabled)
             except RuntimeError: # Signal was not connected or object deleted
@@ -420,14 +420,12 @@ class MainWindow(QMainWindow):
             self._active_editor_undo_stack = None # Clear the reference
 
         editor = self.tab_widget.widget(index)
-        print(f"LOG: _update_status_bar_and_language_selector_on_tab_change - Type of editor: {type(editor)}")
         if isinstance(editor, CodeEditor):
-            print(f"LOG: _update_status_bar_and_language_selector_on_tab_change - editor is CodeEditor instance.")
-            self._active_editor_undo_stack = editor.undoStack() # Store the new stack
+            self._active_editor_undo_stack = editor.document().undoStack() # Store the new stack
 
             self._active_editor_undo_stack.canUndoChanged.connect(self.undo_action.setEnabled)
             self._active_editor_undo_stack.canRedoChanged.connect(self.redo_action.setEnabled)
-            
+
             # Immediately update state
             self.undo_action.setEnabled(editor.document().isUndoAvailable())
             self.redo_action.setEnabled(editor.document().isRedoAvailable())
@@ -1402,7 +1400,7 @@ class MainWindow(QMainWindow):
         # e.g., after a programmatic change that might not reliably trigger document signals,
         # or when a tab is opened/closed.
         # The primary update mechanism for undo/redo actions during typing/editing
-        # is now the direct connection to QUndoStack signals in 
+        # is now the direct connection to QUndoStack signals in
         # _update_status_bar_and_language_selector_on_tab_change.
         current_editor = self._get_current_code_editor()
         if current_editor:

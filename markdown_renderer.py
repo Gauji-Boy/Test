@@ -17,16 +17,16 @@ class HighlightRenderer(mistune.HTMLRenderer):
                     lexer = guess_lexer(code)
                 except ClassNotFound:
                     lexer = None
-        else: 
+        else:
             try:
                 lexer = guess_lexer(code)
             except ClassNotFound:
                 lexer = None
-        
+
         if lexer:
             formatter = HtmlFormatter(cssclass="highlight", linenos=False)
             return highlight(code, lexer, formatter)
-        
+
         return '<pre class="highlight"><code>' + html.escape(code) + '</code></pre>'
 
 markdown_parser = mistune.create_markdown(renderer=HighlightRenderer(escape=False))
@@ -88,7 +88,7 @@ my_var = 123 * 456;
     html_output = render_markdown(test_markdown)
     print("--- HTML Output ---")
     print(html_output)
-    
+
     print("\n--- Test with only unknown language ---")
     unknown_lang_md = "```foobar\nthis is some code\n```"
     print(render_markdown(unknown_lang_md))
@@ -115,3 +115,4 @@ my_var = 123 * 456;
     # HighlightRenderer implementation for correctness. Pygments uses its own internal heuristics.
     # The previous comments discussing this were part of my thought process and mistakenly
     # included in the file content. They are removed now for a clean Python file.
+```

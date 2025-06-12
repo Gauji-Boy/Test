@@ -91,7 +91,7 @@ if __name__ == '__main__':
     # Test loading when no key is present (first clear the file or save a different structure)
     print("\nTesting loading when API key might be absent or file corrupted...")
     config_file_path = manager._get_config_path()
-    
+
     # Simulate corrupted JSON
     if os.path.exists(config_file_path):
         with open(config_file_path, 'w', encoding='utf-8') as f:
@@ -109,11 +109,11 @@ if __name__ == '__main__':
         temp_data['other_setting'] = 'some_value'
         with open(config_file_path, 'w', encoding='utf-8') as f:
             json.dump(temp_data, f, indent=4) # Save without api_key
-            
+
     loaded_key = manager.load_api_key()
     print(f"Loaded API key after removing 'api_key' field: {loaded_key}")
     assert loaded_key is None
-    
+
     # Test saving again to ensure it recovers
     print(f"\nAttempting to save API key again: {test_key}")
     manager.save_api_key(test_key)
