@@ -12,6 +12,7 @@ except ImportError:
     import os
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     from config_manager import ConfigManager
+    from markdown_renderer import render_markdown # Added import
 
 
 class AIAssistantWindow(QDialog):
@@ -20,6 +21,71 @@ class AIAssistantWindow(QDialog):
     """
     user_message_submitted = Signal(str)
     api_key_available = Signal(str) # New signal for when a key is confirmed available
+
+    CSS_STYLES = """
+    body {
+        font-family: Segoe UI, sans-serif;
+        font-size: 14px;
+        line-height: 1.6;
+        background-color: #2b2b2b; /* Dark background for the body of the text browser */
+        color: #d3d3d3; /* Light grey text */
+    }
+    h1, h2, h3, h4, h5, h6 { /* Added h4, h5, h6 for completeness */
+        color: #58a6ff; /* Light blue for headings */
+        border-bottom: 1px solid #444;
+        padding-bottom: 5px;
+        margin-top: 10px; /* Added margin for spacing */
+        margin-bottom: 5px; /* Added margin for spacing */
+    }
+    strong, b {
+        color: #c9d1d9; /* Slightly brighter for emphasis */
+    }
+    em, i {
+        color: #c9d1d9; /* Consistent emphasis color */
+        font-style: italic;
+    }
+    ul, ol {
+        padding-left: 20px;
+        margin-top: 5px; /* Added margin */
+        margin-bottom: 5px; /* Added margin */
+    }
+    li {
+        margin-bottom: 4px; /* Spacing between list items */
+    }
+    p { /* Added paragraph styling */
+        margin-top: 0px;
+        margin-bottom: 8px;
+    }
+    code { /* Styling for inline code */
+        background-color: #1e1e1e;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-family: Consolas, 'Courier New', monospace;
+        font-size: 0.9em; /* Slightly smaller for inline */
+        color: #ce9178; /* A common color for inline code */
+    }
+    /* This is the styling for the Pygments code block (div.highlight > pre) */
+    /* Pygments usually wraps in <div class="highlight"><pre>...</pre></div> */
+    div.highlight {
+        background: #1e1e1e; /* Background for the div container */
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 5px;
+        margin-bottom: 10px; /* Space around the code block */
+        overflow-x: auto; /* Allow horizontal scrolling for long lines */
+    }
+    div.highlight > pre {
+        background: transparent; /* Pre should be transparent if div has background */
+        padding: 0; /* Reset padding if div.highlight handles it */
+        margin: 0; /* Reset margin */
+        font-family: Consolas, 'Courier New', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre; /* Ensure preformatting is maintained */
+        overflow-x: visible; /* Let div.highlight handle scrolling */
+        /* Pygments will add its own color styles within this pre for tokens */
+    }
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,6 +97,7 @@ class AIAssistantWindow(QDialog):
         # Chat history display
         self.chat_history_browser = QTextBrowser(self)
         self.chat_history_browser.setReadOnly(True)
+        self.chat_history_browser.document().setDefaultStyleSheet(AIAssistantWindow.CSS_STYLES)
         self.main_layout.addWidget(self.chat_history_browser)
 
         # Input area layout (horizontal)
@@ -117,14 +184,26 @@ class AIAssistantWindow(QDialog):
     def add_message_to_history(self, sender: str, message: str):
         """
         Adds a message to the chat history browser.
+        This is used for User messages and System messages which should be plain text (escaped).
         """
-        self.chat_history_browser.append(f"<b>{sender}:</b> {message}")
+        # Escape the message content to prevent HTML injection from user/system messages
+        import html
+        escaped_message = html.escape(message)
+        self.chat_history_browser.append(f"<b>{sender}:</b> {escaped_message}")
+        self.chat_history_browser.ensureCursorVisible() # Scroll to the bottom
 
     def display_ai_response(self, response: str):
         """
-        Displays the AI's response in the chat history.
+        Displays the AI's response in the chat history, rendering it from Markdown to HTML.
         """
-        self.add_message_to_history("AI Assistant", response)
+        formatted_html = render_markdown(response)
+
+        # Construct final HTML to append
+        # Using a paragraph for the sender part to ensure it's block-level and takes styling.
+        final_html_output = f"<p><b>AI Assistant:</b></p>{formatted_html}"
+
+        self.chat_history_browser.append(final_html_output) # Use .append() for QTextBrowser
+        self.chat_history_browser.ensureCursorVisible() # Scroll to the bottom
 
 if __name__ == '__main__':
     from PySide6.QtWidgets import QApplication
