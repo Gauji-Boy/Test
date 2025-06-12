@@ -62,7 +62,7 @@ Before you begin, ensure you have the following installed:
 4.  **Install Dependencies:**
     With your virtual environment activated, install all necessary Python packages:
     ```bash
-    pip install PySide6 jedi pyflakes black
+    pip install -r requirements.txt
     ```
 
 ### How to Run

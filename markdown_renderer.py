@@ -14,19 +14,19 @@ class HighlightRenderer(mistune.HTMLRenderer):
                 lexer = get_lexer_by_name(info, stripall=True)
             except ClassNotFound:
                 try:
-                    lexer = guess_lexer(code)
+                    lexer = guess_lexer(code) # Corrected
                 except ClassNotFound:
                     lexer = None
-        else:
+        else: 
             try:
-                lexer = guess_lexer(code)
+                lexer = guess_lexer(code) # Corrected
             except ClassNotFound:
                 lexer = None
-
+        
         if lexer:
             formatter = HtmlFormatter(cssclass="highlight", linenos=False)
             return highlight(code, lexer, formatter)
-
+        
         return '<pre class="highlight"><code>' + html.escape(code) + '</code></pre>'
 
 markdown_parser = mistune.create_markdown(renderer=HighlightRenderer(escape=False))
@@ -88,7 +88,7 @@ my_var = 123 * 456;
     html_output = render_markdown(test_markdown)
     print("--- HTML Output ---")
     print(html_output)
-
+    
     print("\n--- Test with only unknown language ---")
     unknown_lang_md = "```foobar\nthis is some code\n```"
     print(render_markdown(unknown_lang_md))
@@ -110,9 +110,3 @@ my_var = 123 * 456;
     # With cssclass="highlight": <div class="highlight"><pre>...</pre></div>
     # The <pre> will contain <span> elements with classes like 'k' (keyword), 's' (string), etc.
     # These are styled by the Pygments CSS.
-    # The GUESSED_LANGUAGES_PRIORITY list mentioned in previous prompts for guess_lexer
-    # is not a standard parameter for Pygments' guess_lexer and has been removed from the
-    # HighlightRenderer implementation for correctness. Pygments uses its own internal heuristics.
-    # The previous comments discussing this were part of my thought process and mistakenly
-    # included in the file content. They are removed now for a clean Python file.
-```

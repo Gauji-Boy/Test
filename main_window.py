@@ -408,26 +408,28 @@ class MainWindow(QMainWindow):
 
     def _update_status_bar_and_language_selector_on_tab_change(self, index):
         # Disconnect from previous editor's undo stack signals if any
-        if self._active_editor_undo_stack:
+        # Disconnect from previous editor's document signals if any
+        if hasattr(self, '_active_editor_document') and self._active_editor_document:
             try:
-                self._active_editor_undo_stack.canUndoChanged.disconnect(self.undo_action.setEnabled)
+                self._active_editor_document.undoAvailable.disconnect(self.undo_action.setEnabled)
             except RuntimeError: # Signal was not connected or object deleted
                 pass
             try:
-                self._active_editor_undo_stack.canRedoChanged.disconnect(self.redo_action.setEnabled)
+                self._active_editor_document.redoAvailable.disconnect(self.redo_action.setEnabled)
             except RuntimeError: # Signal was not connected or object deleted
                 pass
-            self._active_editor_undo_stack = None # Clear the reference
+            self._active_editor_document = None # Clear the reference
 
         editor = self.tab_widget.widget(index)
         if isinstance(editor, CodeEditor):
-            self._active_editor_undo_stack = editor.document().undoStack() # Store the new stack
+            self._active_editor_document = editor.document()
 
-            self._active_editor_undo_stack.canUndoChanged.connect(self.undo_action.setEnabled)
-            self._active_editor_undo_stack.canRedoChanged.connect(self.redo_action.setEnabled)
-
+            self._active_editor_document.undoAvailable.connect(self.undo_action.setEnabled)
+            self._active_editor_document.redoAvailable.connect(self.redo_action.setEnabled)
+            
             # Immediately update state
-            self.undo_action.setEnabled(editor.document().isUndoAvailable())
+            self.undo_action.setEnabled(self._active_editor_document.isUndoAvailable())
+            self.redo_action.setEnabled(self._active_editor_document.isRedoAvailable())
             self.redo_action.setEnabled(editor.document().isRedoAvailable())
 
             # Update status bar labels
@@ -1057,6 +1059,7 @@ class MainWindow(QMainWindow):
         if file_path and file_path.lower().endswith(".py"):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             self.statusBar().showMessage("Formatting code...")
+            original_text = current_editor.toPlainText() # Store original text before formatting
             try:
                 formatted_text = black.format_str(code_text, mode=black.FileMode())
                 current_editor.setPlainText(formatted_text) # This will trigger on_text_editor_changed
@@ -1400,7 +1403,7 @@ class MainWindow(QMainWindow):
         # e.g., after a programmatic change that might not reliably trigger document signals,
         # or when a tab is opened/closed.
         # The primary update mechanism for undo/redo actions during typing/editing
-        # is now the direct connection to QUndoStack signals in
+        # is now the direct connection to QUndoStack signals in 
         # _update_status_bar_and_language_selector_on_tab_change.
         current_editor = self._get_current_code_editor()
         if current_editor:
