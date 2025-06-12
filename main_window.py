@@ -7,6 +7,9 @@ from interactive_terminal import InteractiveTerminal # Import the new interactiv
 from network_manager import NetworkManager # Import NetworkManager
 from connection_dialog import ConnectionDialog # Import ConnectionDialog
 from ai_controller import AIController # Import AIController
+from file_manager import FileManager
+from session_manager import SessionManager
+from process_manager import ProcessManager
 import tempfile
 import os
 import sys
@@ -33,8 +36,17 @@ class MainWindow(QMainWindow):
         # State variables for collaborative editing
         self.is_host = False
         self.has_control = False # True if this instance has the editing token
-        self.tab_data_map = {} # Map to store tab-specific data (e.g., file paths)
+        # self.tab_data_map = {} # Map to store tab-specific data (e.g., file paths) - REMOVED
         self.recent_projects = [] # Initialize recent projects list
+
+        # Initialize new managers
+        self.file_manager = FileManager(self)
+        self.session_manager = SessionManager(self)
+        self.process_manager = ProcessManager(self)
+
+        # For mapping editor widgets to paths and vice-versa
+        self.editor_to_path = {}
+        self.path_to_editor = {}
 
         self.current_run_mode = "Run" # Initial run mode
         self.setup_status_bar() # Initialize status bar labels first
@@ -42,6 +54,25 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
+
+        # Connect FileManager signals
+        self.file_manager.file_opened.connect(self._handle_file_opened)
+        self.file_manager.file_open_error.connect(self._handle_file_open_error)
+        self.file_manager.dirty_status_changed.connect(self._handle_dirty_status_changed)
+        self.file_manager.file_saved.connect(self._handle_file_saved)
+        self.file_manager.file_save_error.connect(self._handle_file_save_error)
+
+        # Connect SessionManager signals
+        self.session_manager.session_loaded.connect(self._handle_session_loaded)
+        self.session_manager.session_saved.connect(self._handle_session_saved_confirmation)
+        self.session_manager.session_error.connect(self._handle_session_error)
+
+        # Connect ProcessManager signals
+        self.process_manager.output_received.connect(self._handle_process_output)
+        self.process_manager.process_started.connect(self._handle_process_started)
+        self.process_manager.process_finished.connect(self._handle_process_finished)
+        self.process_manager.process_error.connect(self._handle_process_error)
+
         self.update_ui_for_control_state() # Initial UI update
 
         # Initialize active editor undo stack reference
@@ -53,39 +84,19 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'redo_action'):
             self.redo_action.setEnabled(False)
 
-        # Load session data at startup
-        session_data = self.load_session()
-        self.recent_projects = session_data.get("recent_projects", [])
-
-        if initial_path:
-            self.initialize_project(initial_path)
-        elif session_data["root_path"]:
-            self.initialize_project(session_data["root_path"], add_to_recents=False)
-            for file_path in session_data["open_files"]:
-                if os.path.exists(file_path):
-                    self.open_new_tab(file_path)
-            if 0 <= session_data["active_file_index"] < self.tab_widget.count():
-                self.tab_widget.setCurrentIndex(session_data["active_file_index"])
-            elif self.tab_widget.count() > 0:
-                self.tab_widget.setCurrentIndex(0)
-        else:
-            # Initial empty tab if no path is provided and no session to load
-            # Check if this is part of a "join session" flow, which might not need an initial tab here
-            # For now, let's assume open_new_tab() is okay, or initialize_project(None) handles it.
-            # self.open_new_tab() # This will now correctly set initial tab data
-            # If started with no initial_path and no session, it could be a join attempt or fresh start.
-            # The welcome screen or direct "join session" action will handle this.
-            # If neither, then perhaps an empty tab is desired.
-            # For now, let's defer tab opening to specific actions like new file or join session.
-            pass
+        # Session loading logic revised:
+        self.pending_initial_path = initial_path # Store for _handle_session_loaded
+        self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded
 
 
     def initialize_project(self, path: str, add_to_recents: bool = True):
-        """Initializes the project by setting the file explorer root and opening the terminal."""
+        """Initializes the project by setting the file explorer root and opening the terminal.
+           Called by user actions or by _handle_session_loaded.
+        """
         if path is None:
             # This is a client-only startup.
             # Open a single, empty "Untitled" tab.
-            self.open_new_tab() # Use open_new_tab which handles None path
+            self.open_new_tab() # Use open_new_tab which handles None path for untitled
             # Hide the file explorer as there is no project context.
             if hasattr(self, 'file_explorer_dock'): # Check if file_explorer_dock exists
                 self.file_explorer_dock.setVisible(False)
@@ -151,6 +162,7 @@ class MainWindow(QMainWindow):
         self.file_explorer = FileExplorer()
         self.file_explorer_dock.setWidget(self.file_explorer)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
+        # Connect FileExplorer's file_opened signal to MainWindow's open_new_tab method
         self.file_explorer.file_opened.connect(self.open_new_tab)
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
@@ -164,49 +176,8 @@ class MainWindow(QMainWindow):
         self.terminal_dock.setWidget(self.terminal_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
 
-    def _open_file_in_new_tab(self, file_path):
-        """Helper method to open a file in a new tab."""
-        if not os.path.exists(file_path):
-            QMessageBox.warning(self, "File Not Found", f"The file '{file_path}' does not exist.")
-            return
-
-        # Check if the file is already open
-        for i in range(self.tab_widget.count()):
-            editor = self.tab_widget.widget(i)
-            tab_data = self.tab_data_map.get(editor)
-            if tab_data and tab_data.get("path") == file_path:
-                self.tab_widget.setCurrentIndex(i)
-                return
-
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            editor = CodeEditor(self)
-            editor.setPlainText(content)
-            editor.textChanged.connect(self.on_text_editor_changed)
-            editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label(
-                editor.textCursor().blockNumber() + 1,
-                editor.textCursor().columnNumber() + 1
-            ))
-
-            # Determine language based on file extension
-            file_extension = os.path.splitext(file_path)[1].lower()
-            language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
-            editor.set_language(language)
-
-            tab_name = os.path.basename(file_path)
-            new_tab_index = self.tab_widget.addTab(editor, tab_name)
-            self.tab_widget.setCurrentIndex(new_tab_index)
-
-            # Store tab-specific data
-            self.tab_data_map[editor] = {"path": file_path, "is_dirty": False}
-            
-            self.update_editor_read_only_state() # Apply read-only state if in session
-            self.status_bar.showMessage(f"Opened {file_path}", 2000)
-            self._update_undo_redo_actions() # Update undo/redo actions after opening a file
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error Opening File", f"Could not open file {file_path}: {e}")
+    # _open_file_in_new_tab is removed as its functionality is now handled by
+    # file_manager.open_file() and the _handle_file_opened slot.
 
     def setup_menu(self):
         menu_bar = self.menuBar()
@@ -434,7 +405,9 @@ class MainWindow(QMainWindow):
 
     RUNNER_CONFIG = {
         "Python": ["python", "-u", "{file}"],
-        "C++": ["g++", "{file}", "-o", "{output_file}", "&&", "{output_file}"],
+        # Simplified C++ command: just compile. Running the output file would be a separate step.
+        # This is a temporary adjustment due to ProcessManager not handling '&&' or shell chains directly.
+        "C++": ["g++", "{file}", "-o", "{output_file}"],
         "JavaScript": ["node", "{file}"]
     }
 
@@ -462,48 +435,39 @@ class MainWindow(QMainWindow):
             # Immediately update state
             self.undo_action.setEnabled(self._active_editor_document.isUndoAvailable())
             self.redo_action.setEnabled(self._active_editor_document.isRedoAvailable())
-            self.redo_action.setEnabled(editor.document().isRedoAvailable())
 
             # Update status bar labels
             self.language_label.setText(f"Language: {editor.current_language}")
             self._update_cursor_position_label(editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1)
             
             # Auto-select language in QComboBox
-            # Get tab data from self.tab_data_map
-            tab_data = self.tab_data_map.get(editor, {}) # Provide default if editor not in map yet
-            file_path = tab_data.get("path") # No 'if tab_data else None' needed due to default
+            file_path = self.editor_to_path.get(editor)
 
-            if file_path:
+            if file_path and not file_path.startswith("untitled:"):
                 file_extension = os.path.splitext(file_path)[1].lower()
                 detected_language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
                 idx = self.language_selector.findText(detected_language)
                 if idx != -1:
                     self.language_selector.setCurrentIndex(idx)
-                else:
-                    default_idx = self.language_selector.findText("Plain Text")
-                    if default_idx != -1:
-                        self.language_selector.setCurrentIndex(default_idx)
-                    elif self.language_selector.count() > 0:
-                        self.language_selector.setCurrentIndex(0)
-            else:
-                default_idx = self.language_selector.findText("Plain Text")
-                if default_idx != -1:
-                    self.language_selector.setCurrentIndex(default_idx)
-                elif self.language_selector.count() > 0:
-                    self.language_selector.setCurrentIndex(0)
+                else: # Fallback for unknown extensions
+                    self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text"))
+            else: # Untitled file or no path
+                self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text"))
         else:
             # Not a CodeEditor tab, or no editor
-            self.undo_action.setEnabled(False)
-            self.redo_action.setEnabled(False)
+            if hasattr(self, 'undo_action'): self.undo_action.setEnabled(False) # Check existence
+            if hasattr(self, 'redo_action'): self.redo_action.setEnabled(False) # Check existence
             self._active_editor_undo_stack = None # Ensure it's cleared
 
             self.language_label.setText("Language: N/A")
             self.cursor_pos_label.setText("Ln 1, Col 1")
-            default_idx = self.language_selector.findText("Plain Text")
-            if default_idx != -1:
-                self.language_selector.setCurrentIndex(default_idx)
-            elif self.language_selector.count() > 0:
-                self.language_selector.setCurrentIndex(0)
+            # Set language selector to Plain Text if it exists
+            if hasattr(self, 'language_selector'):
+                plain_text_idx = self.language_selector.findText("Plain Text")
+                if plain_text_idx != -1:
+                    self.language_selector.setCurrentIndex(plain_text_idx)
+                elif self.language_selector.count() > 0: # Fallback to first item if "Plain Text" not found
+                    self.language_selector.setCurrentIndex(0)
 
     @Slot()
     def join_session_from_welcome_page(self):
@@ -515,38 +479,28 @@ class MainWindow(QMainWindow):
     @Slot()
     def on_text_editor_changed(self):
         current_editor = self._get_current_code_editor()
-        if not current_editor:
+        if not current_editor or self.is_updating_from_network:
             return
 
-        current_index = self.tab_widget.indexOf(current_editor) # Keep for tab title update
-        if current_index == -1:
-            return # Should not happen
+        path = self.editor_to_path.get(current_editor)
+        if not path:
+            # Handle untitled tabs or errors
+            if current_editor.toPlainText(): # If there's any text, it's dirty from its initial state
+                tab_index = self.tab_widget.indexOf(current_editor)
+                if tab_index != -1:
+                    current_tab_text = self.tab_widget.tabText(tab_index)
+                    if not current_tab_text.endswith("*"):
+                        self.tab_widget.setTabText(tab_index, current_tab_text + "*")
+            return # Do not call FileManager for untracked paths (e.g. untitled)
 
-        # Get tab_data from the map
-        tab_data = self.tab_data_map.get(current_editor)
+        # For tracked files, delegate to FileManager
+        self.file_manager.update_file_content_changed(path, current_editor.toPlainText())
         
-        if not isinstance(tab_data, dict):
-            # Fallback if tab_data is not found or not a dict (should be rare after open_new_tab changes)
-            tab_data = {"path": getattr(current_editor, 'file_path', None), "is_dirty": False}
-            self.tab_data_map[current_editor] = tab_data # Ensure it's in the map
-            # print(f"WARNING: on_text_editor_changed - tab_data was None or not a dict, re-initialized.")
-
-        # Only mark as dirty if the change is not from network update
-        if not self.is_updating_from_network:
-            if not tab_data.get("is_dirty", False):
-                tab_data["is_dirty"] = True # Update the dict in the map by reference
-                # No self.tab_widget.setTabData call needed here.
-                # Add asterisk to tab title
-                current_tab_text = self.tab_widget.tabText(current_index)
-                if not current_tab_text.endswith("*"):
-                    self.tab_widget.setTabText(current_index, current_tab_text + "*")
-            
-            # If in a collaborative session and we have control, send text updates
-            if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly():
-                text = current_editor.toPlainText()
-                self.network_manager.send_data('TEXT_UPDATE', text)
+        # Network sync logic (keep as is for now)
+        if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly():
+            text = current_editor.toPlainText()
+            self.network_manager.send_data('TEXT_UPDATE', text) # This part remains
         
-        # Enable/disable undo/redo actions based on editor's state
         self._update_undo_redo_actions()
 
     @Slot(str)
@@ -656,17 +610,16 @@ class MainWindow(QMainWindow):
     def _handle_run_request(self):
         editor = self._get_current_code_editor()
         if not editor:
-            self.statusBar().showMessage("No active editor to run.", 3000)
+            self.status_bar.showMessage("No active editor to run.", 3000)
             return
 
-        if not self.save_current_file(): # save_current_file calls _save_file
-            self.statusBar().showMessage("Save operation cancelled or failed. Run aborted.", 3000)
+        if not self.save_current_file():
+            self.status_bar.showMessage("Save operation cancelled or failed. Run aborted.", 3000)
             return
 
-        file_path = editor.file_path
-        if not file_path:
-            QMessageBox.warning(self, "Execution Error", "File path not available after save attempt. Cannot execute.")
-            self.statusBar().showMessage("File path error. Run aborted.", 3000)
+        file_path = self.editor_to_path.get(editor)
+        if not file_path or file_path.startswith("untitled:"):
+            QMessageBox.warning(self, "Execution Error", "Please save the file before running.")
             return
 
         _, extension = os.path.splitext(file_path)
@@ -675,39 +628,27 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        command_template = self.RUNNER_CONFIG.get(language_name) # This is now a list
-        if not command_template:
+        command_template_list = self.RUNNER_CONFIG.get(language_name)
+        if not command_template_list:
             QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
             return
 
-        self.statusBar().showMessage(f"Executing '{os.path.basename(file_path)}'...")
-        
+        working_dir = os.path.dirname(file_path) or os.getcwd()
         output_file_no_ext = os.path.splitext(file_path)[0]
-        
-        # Construct the final command string
-        final_command_str = " ".join(command_template).replace("{file}", f'"{file_path}"').replace("{output_file}", f'"{output_file_no_ext}"')
-        
-        # Pass the command to the interactive terminal using the new method
-        self.terminal_widget.run_code_command(final_command_str)
-        
-        self.terminal_dock.show()
-        self.terminal_dock.raise_()
 
-    @Slot()
-    def _run_diagnostic_test(self):
-        print("--- DEBUG: Starting diagnostic test ---")
+        command_parts = []
+        for part in command_template_list:
+            part = part.replace("{file}", file_path)
+            part = part.replace("{output_file}", output_file_no_ext)
+            command_parts.append(part)
         
-        # The simplest possible command. This checks if python is in the PATH.
-        executable = "python"
-        arguments = ["--version"] # A command that prints to stdout and exits.
-        
-        print(f"DEBUG: Hardcoded command: {executable} {' '.join(arguments)}")
-        
-        # Pass the command to the interactive terminal
-        self.terminal_widget.run_code_command(f"{executable} {' '.join(arguments)}")
-        
-        self.terminal_dock.show()
-        self.terminal_dock.raise_()
+        if not command_parts:
+            QMessageBox.warning(self, "Execution Error", "Command became empty after processing template.")
+            return
+
+        self.process_manager.execute(command_parts, working_dir)
+
+    # _run_diagnostic_test is removed as its functionality is superseded by ProcessManager.
 
     def update_editor_read_only_state(self):
         current_editor = self._get_current_code_editor()
@@ -799,52 +740,141 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("You have reclaimed editing control.")
             print(f"LOG: on_host_reclaim_control - is_host={self.is_host}, has_control={self.has_control}")
 
+    def _get_next_untitled_name(self):
+        count = 1
+        while True:
+            name = f"Untitled-{count}"
+            # Check if this name is already used by a placeholder path
+            is_used = False
+            for path in self.path_to_editor.keys():
+                if path.startswith("untitled:") and os.path.basename(path) == name: # Check basename for "untitled:Untitled-N"
+                    is_used = True
+                    break
+            if not is_used:
+                return name
+            count += 1
+
     def open_new_tab(self, file_path=None):
-        editor = CodeEditor(self)
-        tab_title = "Untitled"
-        tab_data = {"path": None, "is_dirty": False} # Initialize tab state
-
         if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                editor.setPlainText(content)
-                tab_title = os.path.basename(file_path) # Get filename
-                editor.file_path = file_path # Store file path in editor widget
-                tab_data["path"] = file_path # Set path for existing file
-            except FileNotFoundError:
-                QMessageBox.critical(self, "Error", f"File not found: '{file_path}'")
-                editor.deleteLater() # Clean up the editor if file not found
-                return
-            except PermissionError:
-                QMessageBox.critical(self, "Error", f"Permission denied to open: '{file_path}'")
-                editor.deleteLater()
-                return
-            except UnicodeDecodeError:
-                QMessageBox.critical(self, "Error", f"Could not open '{file_path}'. It might be a binary file or use an unsupported encoding.")
-                editor.deleteLater()
-                return
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"An unexpected error occurred while opening '{file_path}': {e}")
-                editor.deleteLater()
-                return
+            # Check if already open via path_to_editor to avoid duplicate signal emission if already there
+            if file_path in self.path_to_editor:
+                editor = self.path_to_editor[file_path]
+                # Bring tab to front
+                for i in range(self.tab_widget.count()):
+                    if self.tab_widget.widget(i) == editor:
+                        self.tab_widget.setCurrentIndex(i)
+                        return
+            self.file_manager.open_file(file_path)
         else:
-            editor.file_path = None # For new untitled files
+            # Handle new, untitled file (not tracked by FileManager until first save)
+            editor = CodeEditor(self)
+            tab_title = self._get_next_untitled_name()
+            # Use a unique placeholder for untitled files in local tracking
+            # The placeholder includes "untitled:" prefix and the unique name.
+            untitled_path_placeholder = f"untitled:{tab_title}"
 
-        index = self.tab_widget.addTab(editor, tab_title)
-        # self.tab_data_map[editor] = tab_data # Store tab state - MOVED, ALREADY PRESENT
-        self.tab_widget.setCurrentIndex(index)
-        self.tab_widget.setTabToolTip(index, file_path if file_path else "Untitled") # Set tooltip to full path
-        self.tab_data_map[editor] = tab_data # Store tab_data in the map
+            index = self.tab_widget.addTab(editor, tab_title)
+            self.tab_widget.setCurrentIndex(index)
+            self.tab_widget.setTabToolTip(index, tab_title) # Tooltip is just "Untitled-N"
 
-        # Connect signals from the new editor to update status bar
+            self.editor_to_path[editor] = untitled_path_placeholder
+            self.path_to_editor[untitled_path_placeholder] = editor
+            editor.file_path = untitled_path_placeholder # For consistency with editor's own tracking
+
+            # Connect signals for this new editor
+            editor.textChanged.connect(self.on_text_editor_changed)
+            editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
+            editor.language_changed_signal.connect(self._update_language_label)
+            editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
+
+            self._update_status_bar_and_language_selector_on_tab_change(index)
+            self.update_editor_read_only_state()
+            self._update_undo_redo_actions()
+            # Mark untitled tab as dirty immediately if it has content, or if it's truly new (no content but needs saving)
+            # For a brand new untitled tab, it should show as dirty.
+            self._handle_dirty_status_changed(untitled_path_placeholder, True)
+
+
+    @Slot(str, str) # path, content
+    def _handle_file_opened(self, path, content):
+        if path in self.path_to_editor:
+            editor = self.path_to_editor[path]
+            if editor in self.editor_to_path:
+                for i in range(self.tab_widget.count()):
+                    if self.tab_widget.widget(i) == editor:
+                        self.tab_widget.setCurrentIndex(i)
+                        # Potentially update content if it changed externally, though FileManager handles initial load
+                        # editor.setPlainText(content) # Consider if this is needed or if FM ensures latest
+                        return
+            print(f"Warning: Path {path} in path_to_editor but editor not found in tabs or editor_to_path.")
+
+        editor = CodeEditor(self)
+        editor.setPlainText(content)
+        editor.file_path = path # Important: Set file_path on editor for its own reference
+
+        editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label(
+            editor.textCursor().blockNumber() + 1,
+            editor.textCursor().columnNumber() + 1
+        ))
+
+        file_extension = os.path.splitext(path)[1].lower()
+        language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
+        editor.set_language(language)
+
+        tab_name = os.path.basename(path)
+        new_tab_index = self.tab_widget.addTab(editor, tab_name)
+        self.tab_widget.setCurrentIndex(new_tab_index)
+        self.tab_widget.setTabToolTip(new_tab_index, path)
+
+        self.editor_to_path[editor] = path
+        self.path_to_editor[path] = editor
+
+        editor.textChanged.connect(self.on_text_editor_changed)
         editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
         editor.language_changed_signal.connect(self._update_language_label)
-        editor.textChanged.connect(self.on_text_editor_changed) # Connect for network sync
-        editor.control_reclaim_requested.connect(self.on_host_reclaim_control) # Connect new signal
-        self._update_status_bar_and_language_selector_on_tab_change(index) # Update status bar immediately for new tab
-        self.update_editor_read_only_state() # Apply initial read-only state
-        self._update_undo_redo_actions() # Update undo/redo actions for new tab
+        editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
+
+        self._update_status_bar_and_language_selector_on_tab_change(new_tab_index)
+        self.update_editor_read_only_state()
+        self._update_undo_redo_actions()
+        self.status_bar.showMessage(f"Opened {path}", 2000)
+
+    @Slot(str, str) # path, error_message
+    def _handle_file_open_error(self, path, error_message):
+        QMessageBox.critical(self, "Error Opening File", f"Could not open file '{path}':\n{error_message}")
+        self.status_bar.showMessage(f"Error opening {path}", 5000)
+
+    @Slot(str, bool) # path, is_dirty
+    def _handle_dirty_status_changed(self, path, is_dirty):
+        if path in self.path_to_editor:
+            editor = self.path_to_editor[path]
+            tab_index = self.tab_widget.indexOf(editor)
+            if tab_index != -1:
+                current_tab_text = self.tab_widget.tabText(tab_index)
+                if is_dirty:
+                    if not current_tab_text.endswith("*"):
+                        self.tab_widget.setTabText(tab_index, current_tab_text + "*")
+                else:
+                    if current_tab_text.endswith("*"):
+                        self.tab_widget.setTabText(tab_index, current_tab_text[:-1])
+        # Also handle untitled placeholders directly, as they are in path_to_editor
+        elif path.startswith("untitled:"):
+            if path in self.path_to_editor:
+                editor = self.path_to_editor[path]
+                tab_index = self.tab_widget.indexOf(editor)
+                if tab_index != -1:
+                    current_tab_text = self.tab_widget.tabText(tab_index)
+                    # Untitled tabs are marked dirty if is_dirty is true (e.g. on creation or content change)
+                    if is_dirty:
+                        if not current_tab_text.endswith("*"):
+                            self.tab_widget.setTabText(tab_index, current_tab_text + "*")
+                    else: # This case might be less common for untitled unless saved
+                        if current_tab_text.endswith("*"):
+                             self.tab_widget.setTabText(tab_index, current_tab_text[:-1])
+            else:
+                print(f"Warning: dirty_status_changed for untracked untitled path: {path}")
+        else:
+            print(f"Warning: dirty_status_changed for untracked path: {path}")
 
     def open_folder(self):
         dialog = QFileDialog(self)
@@ -878,11 +908,48 @@ class MainWindow(QMainWindow):
                     widget.cursor_position_changed_signal.disconnect(self._update_cursor_position_label)
                     widget.language_changed_signal.disconnect(self._update_language_label)
                 except RuntimeError: # Signal already disconnected
-                    pass 
+                    pass
             
-            # Remove from tab_data_map
-            if widget in self.tab_data_map:
-                del self.tab_data_map[widget]
+            path_for_editor = self.editor_to_path.get(widget)
+            proceed_with_close = True # Assume we can close unless dirty check says otherwise
+
+            if path_for_editor:
+                is_dirty = False
+                if path_for_editor.startswith("untitled:"):
+                    # Check UI for dirty state of untitled tab
+                    if self.tab_widget.tabText(index_to_close).endswith("*"):
+                        is_dirty = True
+                elif path_for_editor in self.file_manager.open_files_data:
+                    is_dirty = self.file_manager.get_dirty_state(path_for_editor)
+
+                if is_dirty:
+                    # Prompt for this specific tab
+                    tab_name = self.tab_widget.tabText(index_to_close)
+                    reply = QMessageBox.question(self, f"Unsaved Changes - {tab_name}",
+                                                 f"'{tab_name}' has unsaved changes. Save before closing?",
+                                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                                                 QMessageBox.Save)
+                    if reply == QMessageBox.Cancel:
+                        proceed_with_close = False
+                    elif reply == QMessageBox.Save:
+                        if not self._save_file(index_to_close): # Attempt to save
+                            # User cancelled the save dialog
+                            proceed_with_close = False
+                    elif reply == QMessageBox.Discard:
+                        proceed_with_close = True # Discard changes, proceed to close
+
+            if not proceed_with_close:
+                return # Stop the tab closing process
+
+            # If we are here, either file was not dirty, or user chose Discard, or Save was successful.
+            if path_for_editor:
+                if widget in self.editor_to_path:
+                    del self.editor_to_path[widget]
+                if path_for_editor in self.path_to_editor:
+                    del self.path_to_editor[path_for_editor]
+
+                if not path_for_editor.startswith("untitled:"):
+                    self.file_manager.file_closed_in_editor(path_for_editor)
             
             widget.deleteLater()
         
@@ -959,125 +1026,108 @@ class MainWindow(QMainWindow):
         return self._save_file(current_index, save_as=True)
 
     def _save_file(self, index: int, save_as: bool = False) -> bool:
-        # 1. Get Current State
         editor = self.tab_widget.widget(index)
         if not isinstance(editor, CodeEditor):
-            print("DEBUG: _save_file - editor is not CodeEditor instance")
             return False
 
-        # Retrieve tab_data using self.tab_data_map.get(editor)
-        tab_data = self.tab_data_map.get(editor)
-        if tab_data is None:
-            # Fallback: Initialize tab_data if it's missing. This is a recovery mechanism.
-            current_path_from_editor = getattr(editor, 'file_path', None)
-            tab_data = {"path": current_path_from_editor, "is_dirty": True} # Assume dirty
-            self.tab_data_map[editor] = tab_data # Add to map
-            # print(f"WARNING: _save_file - tab_data was None for editor, initialized to: {tab_data}")
+        current_path_placeholder = self.editor_to_path.get(editor)
+        content_to_save = editor.toPlainText()
+        path_to_save = None
 
-        current_path = tab_data.get("path")
-        # editor_file_path = getattr(editor, 'file_path', None) # For fallback logic if needed
+        is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:")
 
-        # Fallback logic for current_path if tab_data had None, but editor knew its path (and not save_as)
-        if current_path is None and editor.file_path is not None and not save_as:
-             current_path = editor.file_path
-             tab_data["path"] = current_path # Synchronize tab_data into our map's dictionary
+        if save_as or is_untitled_file:
+            suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+            suggested_filename_base = "Untitled.py"
+            if not is_untitled_file and current_path_placeholder:
+                suggested_dir = os.path.dirname(current_path_placeholder)
+                suggested_filename_base = os.path.basename(current_path_placeholder)
+            elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name
+                 suggested_filename_base = os.path.basename(current_path_placeholder)
 
-        # 2. Handle "Untitled" Files / "Save As"
-        if current_path is None or save_as:
-            suggested_dir = os.path.dirname(current_path) if current_path and os.path.dirname(current_path) else QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-            if save_as or current_path is None: 
-                suggested_filename_base = "Untitled.py"
-            else: 
-                suggested_filename_base = os.path.basename(current_path)
-            
+
             full_suggested_path = os.path.join(suggested_dir, suggested_filename_base)
 
-            new_path, _ = QFileDialog.getSaveFileName(
+            new_path_tuple = QFileDialog.getSaveFileName(
                 self, "Save File As", full_suggested_path,
                 "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)"
             )
+            new_path = new_path_tuple[0]
 
             if not new_path:
-                self.statusBar().showMessage("Save operation cancelled.", 3000)
+                self.status_bar.showMessage("Save operation cancelled.", 3000)
                 return False
-            
-            current_path = new_path
-            tab_data["path"] = current_path # This updates the dictionary in self.tab_data_map
-            editor.file_path = current_path # Keep editor's own file_path in sync
-            # No self.tab_widget.setTabData needed as self.tab_data_map[editor] = tab_data is done if it was None,
-            # or tab_data is a reference to the dict in the map.
-            editor._update_language_and_highlighting()
-            if hasattr(self, 'file_explorer') and self.file_explorer:
-                self.file_explorer.refresh_tree()
+            path_to_save = new_path
+        else:
+            path_to_save = current_path_placeholder
 
-        if not current_path:
+        if not path_to_save:
              QMessageBox.critical(self, "Save Error", "No file path determined for saving.")
-             self.statusBar().showMessage("Save error: No file path.", 5000)
              return False
 
-        # 3. Provide Clear User Feedback (Start of Operation)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.statusBar().showMessage(f"Formatting and saving '{os.path.basename(current_path)}'...")
-
-        # 4. Perform Synchronous Formatting (for Python files)
-        original_text = editor.toPlainText()
-        formatted_text = original_text
-
-        if current_path.lower().endswith(".py"):
+        if path_to_save.lower().endswith(".py"):
             try:
-                formatted_text = black.format_str(original_text, mode=black.FileMode())
+                formatted_content = black.format_str(content_to_save, mode=black.FileMode())
+                if formatted_content != content_to_save:
+                    self.is_updating_from_network = True
+                    current_cursor_pos = editor.textCursor().position()
+                    editor.setPlainText(formatted_content)
+                    new_cursor = editor.textCursor()
+                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_content)))
+                    editor.setTextCursor(new_cursor)
+                    self.is_updating_from_network = False
+                    content_to_save = formatted_content
             except black.parsing.LibCSTError as e:
                 QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
-                QApplication.restoreOverrideCursor()
-                self.statusBar().showMessage("Formatting error. File not saved.", 5000)
                 return False
             except Exception as e:
-                QMessageBox.critical(self, "Formatting Error", f"Failed to format Python code with Black. File not saved:\n{e}")
-                QApplication.restoreOverrideCursor()
-                self.statusBar().showMessage("Formatting error. File not saved.", 5000)
-                return False
+                print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}")
         
-        # 5. Perform Synchronous Write to Disk
-        try:
-            dir_name = os.path.dirname(current_path)
-            if dir_name:
-                os.makedirs(dir_name, exist_ok=True)
-            with open(current_path, 'w', encoding='utf-8') as f:
-                f.write(formatted_text)
-        except (IOError, PermissionError) as e:
-            QMessageBox.critical(self, "File Save Error", f"Could not write to disk: '{current_path}'.\nError: {e}")
-            QApplication.restoreOverrideCursor()
-            self.statusBar().showMessage("File write error. File not saved.", 5000)
-            return False
-        except Exception as e:
-            QMessageBox.critical(self, "File Save Error", f"An unexpected error occurred while writing to '{current_path}'.\nError: {e}")
-            QApplication.restoreOverrideCursor()
-            self.statusBar().showMessage("Unexpected write error. File not saved.", 5000)
-            return False
-
-        # 6. Finalize State on Success
-        self.is_updating_from_network = True
-        current_cursor_pos = editor.textCursor().position()
-        editor.setPlainText(formatted_text)
-        new_cursor = editor.textCursor()
-        new_cursor.setPosition(min(current_cursor_pos, len(formatted_text)))
-        editor.setTextCursor(new_cursor)
-        self.is_updating_from_network = False
-        
-        tab_data["is_dirty"] = False # This updates the dictionary in self.tab_data_map
-        # tab_data["path"] = current_path # Path is already updated in tab_data
-        # self.tab_data_map[editor] = tab_data # This ensures the map has the latest state.
-                                            # If tab_data is a reference to the dict in the map,
-                                            # this explicit assignment might be redundant but safe.
-        
-        new_tab_title = os.path.basename(current_path)
-        self.tab_widget.setTabText(index, new_tab_title)
-        self.tab_widget.setTabToolTip(index, current_path) # Set full path as tooltip
-        
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.file_manager.save_file(editor, content_to_save, path_to_save)
         QApplication.restoreOverrideCursor()
-        self.statusBar().showMessage(f"File '{new_tab_title}' saved successfully.", 3000)
-        
         return True
+
+    @Slot(object, str, str) # widget_ref (editor), saved_path, saved_content
+    def _handle_file_saved(self, editor_widget, saved_path, saved_content):
+        if editor_widget not in self.editor_to_path:
+            print(f"Warning: _handle_file_saved received widget_ref not in editor_to_path map.")
+            # This could happen if a new untitled file was saved.
+            # Or if the editor_widget reference passed by FileManager isn't the one we have.
+            # Assuming editor_widget is the correct CodeEditor instance passed to save_file.
+
+        old_path = self.editor_to_path.get(editor_widget)
+
+        if old_path and old_path != saved_path:
+            # File was saved under a new name (Save As) or untitled file saved first time
+            if old_path in self.path_to_editor:
+                del self.path_to_editor[old_path]
+        
+        self.editor_to_path[editor_widget] = saved_path
+        self.path_to_editor[saved_path] = editor_widget
+        # Update the editor's internal file_path attribute as well
+        if isinstance(editor_widget, CodeEditor):
+            editor_widget.file_path = saved_path
+
+
+        tab_index = self.tab_widget.indexOf(editor_widget)
+        if tab_index != -1:
+            self.tab_widget.setTabText(tab_index, os.path.basename(saved_path))
+            self.tab_widget.setTabToolTip(tab_index, saved_path)
+            # The dirty status update (removing '*') is handled by _handle_dirty_status_changed
+            # which is triggered by FileManager's dirty_status_changed signal.
+
+        # Content in editor should already be what was saved, as formatting happens in _save_file before calling fm.save_file.
+        # If black formatting changed content, editor was updated then.
+
+        self.status_bar.showMessage(f"File '{os.path.basename(saved_path)}' saved successfully.", 3000)
+        if hasattr(self, 'file_explorer') and self.file_explorer:
+             self.file_explorer.refresh_tree() # Refresh file explorer to show new file or rename
+
+    @Slot(object, str, str) # widget_ref, path_attempted, error_message
+    def _handle_file_save_error(self, widget_ref, path_attempted, error_message):
+        QMessageBox.critical(self, "File Save Error", f"Could not save file '{path_attempted}':\n{error_message}")
+        self.status_bar.showMessage(f"Save error for {path_attempted}", 5000)
 
     def format_current_code(self):
         current_editor = self._get_current_code_editor()
@@ -1085,38 +1135,27 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("No active editor to format.")
             return
 
-        current_index = self.tab_widget.indexOf(current_editor)
-        if current_index == -1:
+        path = self.editor_to_path.get(current_editor)
+        if not path or path.startswith("untitled:"):
+            self.status_bar.showMessage("Formatting requires a saved Python file.")
             return
 
-        code_text = current_editor.toPlainText()
-        # Get tab_data from the map
-        tab_data = self.tab_data_map.get(current_editor)
-        file_path = tab_data.get("path") if tab_data else None
-
-        # Only attempt to format if it's a Python file
-        if file_path and file_path.lower().endswith(".py"):
+        if path.lower().endswith(".py"):
             QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.statusBar().showMessage("Formatting code...")
-            original_text = current_editor.toPlainText() # Store original text before formatting
+            self.status_bar.showMessage("Formatting code...")
+            original_text = current_editor.toPlainText()
             try:
-                formatted_text = black.format_str(code_text, mode=black.FileMode())
-                current_editor.setPlainText(formatted_text) # This will trigger on_text_editor_changed
+                formatted_text = black.format_str(original_text, mode=black.FileMode())
+                if original_text != formatted_text:
+                    self.is_updating_from_network = True
+                    current_cursor_pos = current_editor.textCursor().position()
+                    current_editor.setPlainText(formatted_text)
+                    new_cursor = current_editor.textCursor()
+                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_text)))
+                    current_editor.setTextCursor(new_cursor)
+                    self.is_updating_from_network = False
+                    self.file_manager.update_file_content_changed(path, formatted_text)
                 self.status_bar.showMessage("Code formatted.")
-                
-                # Mark as dirty in self.tab_data_map if formatting changed the text
-                # on_text_editor_changed will handle the asterisk if it's a new change
-                if tab_data: # Ensure tab_data was found
-                    if original_text != formatted_text and not tab_data.get("is_dirty", False):
-                        tab_data["is_dirty"] = True
-                        # Update tab title with asterisk if not already there
-                        # This part is tricky as on_text_editor_changed also does this.
-                        # To avoid double-asterisk or complex logic, let on_text_editor_changed handle it.
-                        # We just ensure the dirty flag is set in our map.
-                        # current_tab_text = self.tab_widget.tabText(current_index)
-                        # if not current_tab_text.endswith("*"):
-                        #    self.tab_widget.setTabText(current_index, current_tab_text + "*")
-                
             except black.parsing.LibCSTError as e:
                 self.status_bar.showMessage("Formatting failed: Syntax error.")
                 QMessageBox.critical(self, "Formatting Error", f"Syntax error in code. Cannot format:\n{e}")
@@ -1128,58 +1167,169 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("Formatting is only supported for Python files (.py).")
 
+    def _save_file(self, index: int, save_as: bool = False) -> bool:
+        editor = self.tab_widget.widget(index)
+        if not isinstance(editor, CodeEditor):
+            return False
+
+        current_path_placeholder = self.editor_to_path.get(editor)
+        content_to_save = editor.toPlainText()
+        path_to_save = None
+
+        is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:")
+
+        if save_as or is_untitled_file:
+            suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+            suggested_filename_base = "Untitled.py"
+            if not is_untitled_file and current_path_placeholder:
+                suggested_dir = os.path.dirname(current_path_placeholder)
+                suggested_filename_base = os.path.basename(current_path_placeholder)
+            elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name
+                 suggested_filename_base = os.path.basename(current_path_placeholder)
+
+
+            full_suggested_path = os.path.join(suggested_dir, suggested_filename_base)
+            
+            new_path_tuple = QFileDialog.getSaveFileName(
+                self, "Save File As", full_suggested_path,
+                "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)"
+            )
+            new_path = new_path_tuple[0]
+
+            if not new_path:
+                self.status_bar.showMessage("Save operation cancelled.", 3000)
+                return False
+            path_to_save = new_path
+        else:
+            path_to_save = current_path_placeholder
+
+        if not path_to_save:
+             QMessageBox.critical(self, "Save Error", "No file path determined for saving.")
+             return False
+
+        if path_to_save.lower().endswith(".py"):
+            try:
+                formatted_content = black.format_str(content_to_save, mode=black.FileMode())
+                if formatted_content != content_to_save:
+                    self.is_updating_from_network = True
+                    current_cursor_pos = editor.textCursor().position()
+                    editor.setPlainText(formatted_content)
+                    new_cursor = editor.textCursor()
+                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_content)))
+                    editor.setTextCursor(new_cursor)
+                    self.is_updating_from_network = False
+                    content_to_save = formatted_content
+            except black.parsing.LibCSTError as e:
+                QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
+                return False
+            except Exception as e:
+                print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}")
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.file_manager.save_file(editor, content_to_save, path_to_save)
+        QApplication.restoreOverrideCursor()
+        return True
+
 
     def save_session(self):
-        session_data = {}
-        try:
-            root_path = self.file_explorer.model.rootPath() # Get root path from QFileSystemModel
-            open_files = []
+    def save_session(self):
+        if not self.session_manager: # Might be called during early shutdown
+            return
+
+        open_files_data = self.file_manager.get_all_open_files_data()
+
+        current_editor_widget = self.tab_widget.currentWidget()
+        active_file_path = None
+        if isinstance(current_editor_widget, CodeEditor):
+            active_file_path = self.editor_to_path.get(current_editor_widget)
+            if active_file_path and active_file_path.startswith("untitled:"):
+                active_file_path = None # Don't save placeholder as active path
+
+        root_path_to_save = None
+        if hasattr(self.file_explorer, 'model') and self.file_explorer.model is not None:
+             root_path_to_save = self.file_explorer.model.rootPath()
+        else:
+            if active_file_path and os.path.exists(active_file_path):
+                root_path_to_save = os.path.dirname(active_file_path)
+            # print("Warning: File explorer model not available for saving root_path.")
+
+        self.session_manager.save_session(
+            open_files_data,
+            self.recent_projects,
+            root_path_to_save,
+            active_file_path
+        )
+
+    # Old load_session method is removed. Session loading is now handled by
+    # SessionManager emitting session_loaded, which calls _handle_session_loaded.
+
+    @Slot(dict) # session_data
+    def _handle_session_loaded(self, session_data):
+        # print(f"MainWindow: _handle_session_loaded received: {session_data}")
+        self.recent_projects = session_data.get("recent_projects", [])
+        self._update_recent_menu()
+
+        root_path_from_session = session_data.get("root_path")
+        open_files_data_from_session = session_data.get("open_files_data", {})
+        active_file_path_to_restore = session_data.get("active_file_path") # Changed from active_file_index
+
+        # Restore FileManager's state with data from session
+        self.file_manager.load_open_files_data(open_files_data_from_session)
+
+        # Initialize project if root_path is available from session
+        # This should happen before trying to open files, to set up the file explorer context
+        if root_path_from_session:
+            self.initialize_project(root_path_from_session, add_to_recents=False)
+
+        # Open files based on the restored data in FileManager
+        paths_to_open = sorted(list(open_files_data_from_session.keys()))
+        for path in paths_to_open:
+            if os.path.exists(path):
+                self.file_manager.open_file(path) # This triggers _handle_file_opened
+            else:
+                print(f"Warning: File path from session not found, skipping: {path}")
+
+        # Process pending_initial_path after session files are potentially opened
+        if self.pending_initial_path:
+            # Check if the initial_path is already opened by session loading
+            # self.path_to_editor should be populated by _handle_file_opened by now
+            if not self.path_to_editor.get(self.pending_initial_path):
+                # If initial_path was a directory, initialize_project would handle it.
+                # If it was a file, it needs to be explicitly opened if not already.
+                if os.path.isfile(self.pending_initial_path):
+                    # If initialize_project was not called for this root, call it
+                    if not root_path_from_session or os.path.dirname(self.pending_initial_path) != root_path_from_session:
+                         self.initialize_project(self.pending_initial_path, add_to_recents=True) # add_to_recents might need adjustment
+                    else: # Root path matches, just ensure file is open
+                        self.file_manager.open_file(self.pending_initial_path)
+                elif os.path.isdir(self.pending_initial_path):
+                     self.initialize_project(self.pending_initial_path, add_to_recents=True)
+            self.pending_initial_path = None
+
+
+        # Restore active tab - this needs to happen *after* all tabs are created
+        # Use active_file_path_to_restore from session data
+        if active_file_path_to_restore and active_file_path_to_restore in self.path_to_editor:
+            editor_to_activate = self.path_to_editor[active_file_path_to_restore]
             for i in range(self.tab_widget.count()):
-                editor = self.tab_widget.widget(i)
-                if isinstance(editor, CodeEditor):
-                    tab_data = self.tab_data_map.get(editor) # Get tab data from map
-                    if tab_data and tab_data.get("path") and os.path.exists(tab_data.get("path")):
-                        open_files.append(tab_data.get("path"))
-            
-            active_file_index = self.tab_widget.currentIndex()
-            
-            session_data = {
-                "root_path": root_path,
-                "open_files": open_files,
-                "active_file_index": active_file_index,
-                "recent_projects": self.recent_projects # Save recent projects
-            }
-            
-            config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-            session_dir = os.path.join(config_dir, ".aether_editor")
-            os.makedirs(session_dir, exist_ok=True)
-            session_file = os.path.join(session_dir, "session.json")
-            
-            with open(session_file, 'w') as f:
-                json.dump(session_data, f, indent=4)
-            print(f"LOG: Session saved to {session_file}. Content: {session_data}")
-        except Exception as e:
-            print(f"LOG: save_session - Error saving session: {e}")
+                if self.tab_widget.widget(i) == editor_to_activate:
+                    self.tab_widget.setCurrentIndex(i)
+                    break
+        elif self.tab_widget.count() > 0: # Default to first tab if active one not found or not specified
+            self.tab_widget.setCurrentIndex(0)
 
-    def load_session(self):
-        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        session_dir = os.path.join(config_dir, ".aether_editor")
-        session_file = os.path.join(session_dir, "session.json")
-        
-        session_data = {"root_path": None, "open_files": [], "active_file_index": 0, "recent_projects": []} # Default empty session
+        self.status_bar.showMessage("Session loaded.", 2000)
 
-        if os.path.exists(session_file):
-            try:
-                with open(session_file, 'r') as f:
-                    loaded_data = json.load(f)
-                    session_data["root_path"] = loaded_data.get("root_path")
-                    session_data["open_files"] = loaded_data.get("open_files", [])
-                    session_data["active_file_index"] = loaded_data.get("active_file_index", 0)
-                    session_data["recent_projects"] = loaded_data.get("recent_projects", [])
-                print(f"LOG: Session loaded from {session_file}. Content: {session_data}")
-            except Exception as e:
-                print(f"LOG: load_session - Error loading session: {e}")
-        return session_data
+    @Slot()
+    def _handle_session_saved_confirmation(self):
+        # print("MainWindow: Session saved confirmation received.")
+        self.status_bar.showMessage("Session saved.", 2000)
+
+    @Slot(str) # error_message
+    def _handle_session_error(self, error_message):
+        print(f"MainWindow: Session error: {error_message}")
+        QMessageBox.warning(self, "Session Error", error_message)
+        self.status_bar.showMessage(f"Session error: {error_message}", 5000)
 
     def add_recent_project(self, path: str):
         if path not in self.recent_projects:
@@ -1269,48 +1419,54 @@ class MainWindow(QMainWindow):
                     self.welcome_page.update_list(self.recent_projects)
 
     def closeEvent(self, event):
-        self.save_session() # Save session on close
-        unsaved_changes_exist = False
-        for i in range(self.tab_widget.count()):
-            editor = self.tab_widget.widget(i)
-            if isinstance(editor, CodeEditor):
-                tab_data = self.tab_data_map.get(editor)
-                if tab_data and tab_data.get("is_dirty", False):
-                    unsaved_changes_exist = True
-                    break
+        # Check for unsaved changes across all open, tracked files
+        dirty_files_to_save = []
+        for editor_widget, path in list(self.editor_to_path.items()): # Iterate over a copy
+            is_dirty = False
+            if path.startswith("untitled:"):
+                # Untitled files are considered dirty if they have content or just exist and are new
+                tab_idx = self.tab_widget.indexOf(editor_widget)
+                if tab_idx != -1 and self.tab_widget.tabText(tab_idx).endswith("*"): # Check the UI indicator
+                    is_dirty = True
+            elif path in self.file_manager.open_files_data: # Check tracked files via FileManager
+                is_dirty = self.file_manager.get_dirty_state(path)
 
-        if unsaved_changes_exist:
+            if is_dirty:
+                dirty_files_to_save.append(editor_widget) # Store editor widget to find its index later
+
+        if dirty_files_to_save:
             reply = QMessageBox.question(self, "Unsaved Changes",
                                          "You have unsaved changes. Do you want to save them before closing?",
-                                         QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                                         QMessageBox.Save) # Default button
+                                         QMessageBox.SaveAll | QMessageBox.Discard | QMessageBox.Cancel,
+                                         QMessageBox.SaveAll) # Default to SaveAll
 
             if reply == QMessageBox.Cancel:
                 event.ignore()
                 return
-            elif reply == QMessageBox.Save:
-                # Store current index to restore it later
-                original_current_index = self.tab_widget.currentIndex()
-                
-                for i in range(self.tab_widget.count()):
-                    editor = self.tab_widget.widget(i) # Get editor for the tab
-                    if isinstance(editor, CodeEditor):
-                        tab_data = self.tab_data_map.get(editor) # Get its data from the map
-                        if tab_data and tab_data.get("is_dirty", False):
-                            # Temporarily set the current index to the tab to be saved
-                            # This ensures _save_file operates on the correct tab
-                            self.tab_widget.setCurrentIndex(i)
-                        if not self._save_file(i): # If save is cancelled
+            elif reply == QMessageBox.SaveAll:
+                all_saved_successfully = True
+                for editor_widget in dirty_files_to_save:
+                    idx = self.tab_widget.indexOf(editor_widget)
+                    if idx != -1:
+                        # self.tab_widget.setCurrentIndex(idx) # Ensure tab is current for _save_file context
+                        if not self._save_file(idx): # Attempt to save
+                            all_saved_successfully = False
+                            # If a save is cancelled by user, _save_file returns False.
+                            # We should then ignore the close event.
+                            QMessageBox.warning(self, "Save Cancelled",
+                                                f"Save operation was cancelled for '{self.tab_widget.tabText(idx)}'. Closing aborted.")
                             event.ignore()
-                            return # Stop processing and prevent close
-                
-                # Restore original current index if it's still valid
-                if 0 <= original_current_index < self.tab_widget.count():
-                    self.tab_widget.setCurrentIndex(original_current_index)
+                            return
+                if not all_saved_successfully: # Should be caught by return above, but as safeguard
+                    event.ignore()
+                    return
+            elif reply == QMessageBox.Discard:
+                # User chose to discard changes, proceed to close.
+                pass
         
-        # Only save the session and accept the close event if all saves were successful or discarded
-        self.save_session()
-        event.accept()
+        # If all checks pass (no dirty files, or user chose Discard, or all saves succeeded):
+        self.save_session() # Save session state (open files list, etc.)
+        event.accept() # Allow window to close
 
     @Slot(QPoint)
     def on_file_tree_context_menu(self, position):
@@ -1358,24 +1514,73 @@ class MainWindow(QMainWindow):
         if ok and new_name:
             new_path = os.path.join(os.path.dirname(old_path), new_name)
             
-            # If it's an open editor, update its tab data and tab title
-            editor, tab_idx = self._find_editor_for_path(old_path) # Renamed tab_index to tab_idx
-            if editor:
-                tab_data_for_editor = self.tab_data_map.get(editor) # Get from map
-                if tab_data_for_editor: # Check if found in map
-                    tab_data_for_editor["path"] = new_path
-                    # tab_data_for_editor["is_dirty"] could be set if needed, e.g. if rename dirties.
-                # Update editor's internal file_path as well
-                editor.file_path = new_path
-                self.tab_widget.setTabText(tab_idx, os.path.basename(new_path))
-                self.tab_widget.setTabToolTip(tab_idx, new_path) # Update tooltip as well
-            
-            try:
-                os.rename(old_path, new_path)
-                self.status_bar.showMessage(f"Renamed {item_type} to {new_name}")
-                self.file_explorer.refresh_view() # Refresh the file explorer
-            except Exception as e:
-                self.status_bar.showMessage(f"Error renaming {item_type}: {e}")
+        # If it's an open editor, update its path in mappings and tab title
+        # editor, tab_idx = self._find_editor_for_path(old_path) # This helper might be redundant if path_to_editor is source of truth
+
+        try:
+            # Inform FileManager first if the path is tracked
+            if old_path in self.path_to_editor: # Check if it's an open tab
+                editor_widget = self.path_to_editor[old_path] # Get the editor widget
+                self.file_manager.rename_path_tracking(old_path, new_path)
+
+                # Update MainWindow's own mappings and UI
+                # Remove old path entry, add new path entry for the same editor widget
+                self.path_to_editor.pop(old_path)
+                self.path_to_editor[new_path] = editor_widget
+                self.editor_to_path[editor_widget] = new_path # Update reverse mapping
+
+                editor_widget.file_path = new_path # Update editor's internal file_path attribute
+
+                tab_idx = self.tab_widget.indexOf(editor_widget)
+                if tab_idx != -1:
+                    self.tab_widget.setTabText(tab_idx, os.path.basename(new_path))
+                    self.tab_widget.setTabToolTip(tab_idx, new_path)
+
+            os.rename(old_path, new_path)
+            self.status_bar.showMessage(f"Renamed to {os.path.basename(new_path)}")
+            if hasattr(self, 'file_explorer'): self.file_explorer.refresh_tree()
+        except Exception as e:
+            QMessageBox.critical(self, "Rename Error", f"Error renaming: {e}")
+            self.status_bar.showMessage(f"Error renaming: {e}")
+
+
+    @Slot(str)
+    def _handle_process_output(self, output_str):
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.append_output(output_str)
+            self.terminal_dock.show()
+        else:
+            print(f"Process Output (no terminal_widget): {output_str}")
+
+    @Slot()
+    def _handle_process_started(self):
+        self.status_bar.showMessage("Process started...")
+        if hasattr(self, 'run_debug_action_button'):
+            self.run_debug_action_button.setEnabled(False)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
+            self.terminal_widget.clear_output()
+            self.terminal_dock.show()
+            self.terminal_dock.raise_()
+
+    @Slot(int, QProcess.ExitStatus)
+    def _handle_process_finished(self, exit_code, exit_status):
+        status_text = "successfully" if exit_status == QProcess.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
+        message = f"Process finished {status_text}."
+        self.status_bar.showMessage(message, 5000)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
+            self.terminal_widget.append_output(f"\n--- {message} ---\n")
+        if hasattr(self, 'run_debug_action_button'):
+            self.run_debug_action_button.setEnabled(True)
+
+    @Slot(str)
+    def _handle_process_error(self, error_message):
+        full_error_message = f"Process error: {error_message}"
+        QMessageBox.critical(self, "Process Error", full_error_message)
+        self.status_bar.showMessage(full_error_message, 5000)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
+            self.terminal_widget.append_output(f"\n--- ERROR: {error_message} ---\n")
+        if hasattr(self, 'run_debug_action_button'):
+            self.run_debug_action_button.setEnabled(True)
 
     def _delete_file_folder(self, index):
         path_to_delete = self.file_explorer.model.filePath(index)
@@ -1386,20 +1591,27 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.Yes:
             try:
-                # Close any open tabs related to the deleted file/folder
-                tabs_to_close = []
-                for i in range(self.tab_widget.count()):
-                    editor = self.tab_widget.widget(i)
-                    if isinstance(editor, CodeEditor) and editor.file_path:
-                        if os.path.isfile(path_to_delete) and editor.file_path == path_to_delete:
-                            tabs_to_close.append(i)
-                        elif os.path.isdir(path_to_delete) and editor.file_path.startswith(path_to_delete):
-                            tabs_to_close.append(i)
+                # If path_to_delete is an open tab, close it first.
+                # This needs to handle directories as well: close all tabs for files within the directory.
+                tabs_to_close_indices = []
+                if os.path.isdir(path_to_delete):
+                    for editor_widget, open_path in list(self.editor_to_path.items()): # Iterate over a copy for modification
+                        if open_path.startswith(path_to_delete + os.sep):
+                            tab_idx = self.tab_widget.indexOf(editor_widget)
+                            if tab_idx != -1:
+                                tabs_to_close_indices.append(tab_idx)
+                elif os.path.isfile(path_to_delete):
+                    if path_to_delete in self.path_to_editor:
+                        editor_widget = self.path_to_editor[path_to_delete]
+                        tab_idx = self.tab_widget.indexOf(editor_widget)
+                        if tab_idx != -1:
+                            tabs_to_close_indices.append(tab_idx)
                 
                 # Close tabs in reverse order to avoid index issues
-                for i in sorted(tabs_to_close, reverse=True):
-                    self.close_tab(i)
+                for tab_idx in sorted(list(set(tabs_to_close_indices)), reverse=True): # Ensure unique indices
+                    self.close_tab(tab_idx) # close_tab should handle FM.file_closed_in_editor
 
+                # Now perform the actual deletion from the file system
                 if os.path.isdir(path_to_delete):
                     shutil.rmtree(path_to_delete)
                 else:
