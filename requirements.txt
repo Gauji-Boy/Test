@@ -4,3 +4,4 @@ pyflakes
 black
 google-generativeai
 pygments
+mistune
