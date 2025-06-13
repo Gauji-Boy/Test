@@ -2,7 +2,8 @@ import json
 import socket # For finding an open port
 from contextlib import closing
 import sys # For sys.executable
-from PySide6.QtCore import QObject, Signal, QProcess, QTcpSocket, QThread, QTimer
+from PySide6.QtCore import QObject, Signal, QProcess, QThread, QTimer
+from PySide6.QtNetwork import QTcpSocket
 from PySide6.QtNetwork import QAbstractSocket # For error types if needed
 
 class DebugManager(QObject):

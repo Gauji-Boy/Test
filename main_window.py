@@ -52,6 +52,12 @@ class MainWindow(QMainWindow):
         self.current_run_mode = "Run" # Initial run mode
         self.setup_status_bar() # Initialize status bar labels first
         self.setup_toolbar() # Re-enable toolbar for the new button
+        # Initialize DebugManager
+        self.debug_manager = DebugManager(self)
+        self.debug_manager.session_started.connect(self._on_debug_session_started)
+        self.debug_manager.session_stopped.connect(self._on_debug_session_stopped)
+        self.debug_manager.paused.connect(self._on_debugger_paused)
+        self.debug_manager.resumed.connect(self._on_debugger_resumed)
         self.setup_debugger_toolbar() # Add this line
         self.setup_ui()
         self.setup_menu()
@@ -91,13 +97,6 @@ class MainWindow(QMainWindow):
         self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded
 
         self.active_breakpoints = {} # Stores path -> set of line numbers
-
-        # Initialize DebugManager
-        self.debug_manager = DebugManager(self)
-        self.debug_manager.session_started.connect(self._on_debug_session_started)
-        self.debug_manager.session_stopped.connect(self._on_debug_session_stopped)
-        self.debug_manager.paused.connect(self._on_debugger_paused)
-        self.debug_manager.resumed.connect(self._on_debugger_resumed)
 
 
     def setup_debugger_toolbar(self):
