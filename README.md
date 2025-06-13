@@ -8,6 +8,7 @@
 *   **GUI Framework:** PySide6
 *   **Networking:** Python's `socket` module (wrapped by PySide6's `QTcpServer` and `QTcpSocket`)
 *   **Code Intelligence:** Jedi (for completions), Pyflakes (for linting), Black (for formatting)
+*   **Markdown Rendering:** Mistune
 
 Welcome to Aether Editor, a lightweight and interactive code editor featuring real-time collaborative editing capabilities. This editor allows multiple users to work on the same codebase simultaneously, making it ideal for pair programming, code reviews, and educational purposes.
 
@@ -30,7 +31,7 @@ Follow these instructions to set up and run Aether Editor on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-*   **Python 3.8+**: You can download it from [python.org](https://www.python.org/downloads/).
+*   **Python 3.10+**: You can download it from [python.org](https://www.python.org/downloads/).
 *   **pip**: Python's package installer (usually comes with Python).
 
 ### Setup Instructions
