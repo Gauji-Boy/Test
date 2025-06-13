@@ -39,7 +39,13 @@ class PythonHighlighter(QSyntaxHighlighter):
 
         try:
             offset = 0
-            for token, content in self.lexer.get_tokens_unprocessed(text):
+            for item in self.lexer.get_tokens_unprocessed(text):
+                if not (isinstance(item, tuple) and len(item) == 2):
+                    import sys
+                    print(f"Pygments token error: Expected a 2-tuple, got {repr(item)}", file=sys.stderr)
+                    continue
+
+                token, content = item
                 token_type = str(token).split('.')[-1].lower() # e.g., 'Token.Keyword' -> 'keyword'
                 
                 # Map Pygments token types to our defined formats
@@ -50,7 +56,8 @@ class PythonHighlighter(QSyntaxHighlighter):
                 offset += len(content)
         except Exception as e:
             # Fallback to default if Pygments fails for some reason
-            print(f"Pygments highlighting error: {e}")
+            import sys
+            print(f"Pygments highlighting error: {e}", file=sys.stderr)
             self.setFormat(0, len(text), self.formats.get("default"))
 
     def set_lexer_for_filename(self, filename, text_content):
