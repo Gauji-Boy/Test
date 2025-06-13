@@ -566,6 +566,41 @@ class CodeEditor(QWidget): # Now inherits QWidget
             # The update call will use event.rect() in paintEvent to limit painting.
              self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
 
+    def set_exec_highlight(self, line_number: int | None):
+        if not hasattr(self, 'text_edit'): # Should always exist, but good check
+            return
+
+        if line_number is None:
+            self.text_edit.setExtraSelections([])
+            return
+
+        # Assuming line_number is 1-based as typically provided by debuggers
+        # QPlainTextEdit/QTextDocument work with 0-based block numbers
+        target_block_number = line_number - 1
+        if target_block_number < 0:
+            self.text_edit.setExtraSelections([]) # Invalid line number, clear highlights
+            return
+
+        selection = QTextEdit.ExtraSelection()
+
+        # Define the format for the highlight
+        highlight_format = QTextCharFormat()
+        highlight_format.setBackground(QColor("#3a3d41"))
+        highlight_format.setProperty(QTextCharFormat.FullWidthSelection, True)
+
+        selection.format = highlight_format
+
+        # Set the cursor for the selection
+        # Move cursor to the beginning of the specified block number
+        block = self.text_edit.document().findBlockByNumber(target_block_number)
+        if block.isValid():
+            cursor = QTextCursor(block)
+            # No need to movePosition, cursor for block is already at start.
+            selection.cursor = cursor
+            self.text_edit.setExtraSelections([selection])
+        else:
+            # Block not valid (e.g., line number out of range), clear previous highlights
+            self.text_edit.setExtraSelections([])
 
     # --- Proxy Methods to _InternalCodeEditor ---
     def toPlainText(self):
