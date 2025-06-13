@@ -3,6 +3,7 @@ from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, 
 from PySide6.QtCore import Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject, QProcess
 from file_explorer import FileExplorer
 from code_editor import CodeEditor
+from debug_manager import DebugManager # Import DebugManager
 from interactive_terminal import InteractiveTerminal # Import the new interactive terminal
 from network_manager import NetworkManager # Import NetworkManager
 from connection_dialog import ConnectionDialog # Import ConnectionDialog
@@ -91,34 +92,47 @@ class MainWindow(QMainWindow):
 
         self.active_breakpoints = {} # Stores path -> set of line numbers
 
+        # Initialize DebugManager
+        self.debug_manager = DebugManager(self)
+        self.debug_manager.session_started.connect(self._on_debug_session_started)
+        self.debug_manager.session_stopped.connect(self._on_debug_session_stopped)
+        self.debug_manager.paused.connect(self._on_debugger_paused)
+        self.debug_manager.resumed.connect(self._on_debugger_resumed)
+
+
     def setup_debugger_toolbar(self):
         self.debugger_toolbar = QToolBar("Debugger Toolbar", self)
         self.addToolBar(Qt.TopToolBarArea, self.debugger_toolbar)
 
-        continue_action = QAction(self.style().standardIcon(QStyle.SP_MediaPlay), "Continue (F5)", self)
-        continue_action.setShortcut("F5")
-        # continue_action.triggered.connect(self.debug_continue) # Placeholder
-        self.debugger_toolbar.addAction(continue_action)
+        self.continue_action = QAction(self.style().standardIcon(QStyle.SP_MediaPlay), "Continue (F5)", self)
+        self.continue_action.setShortcut("F5")
+        self.continue_action.triggered.connect(lambda: self.debug_manager.continue_execution()) # Connect to DebugManager
+        self.continue_action.setEnabled(False)
+        self.debugger_toolbar.addAction(self.continue_action)
 
-        step_over_action = QAction(self.style().standardIcon(QStyle.SP_MediaSkipForward), "Step Over (F10)", self)
-        step_over_action.setShortcut("F10")
-        # step_over_action.triggered.connect(self.debug_step_over) # Placeholder
-        self.debugger_toolbar.addAction(step_over_action)
+        self.step_over_action = QAction(self.style().standardIcon(QStyle.SP_MediaSkipForward), "Step Over (F10)", self)
+        self.step_over_action.setShortcut("F10")
+        self.step_over_action.triggered.connect(lambda: self.debug_manager.step_over()) # Connect to DebugManager
+        self.step_over_action.setEnabled(False)
+        self.debugger_toolbar.addAction(self.step_over_action)
 
-        step_into_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekForward), "Step Into (F11)", self)
-        step_into_action.setShortcut("F11")
-        # step_into_action.triggered.connect(self.debug_step_into) # Placeholder
-        self.debugger_toolbar.addAction(step_into_action)
+        self.step_into_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekForward), "Step Into (F11)", self)
+        self.step_into_action.setShortcut("F11")
+        self.step_into_action.triggered.connect(lambda: self.debug_manager.step_into()) # Connect to DebugManager
+        self.step_into_action.setEnabled(False)
+        self.debugger_toolbar.addAction(self.step_into_action)
 
-        step_out_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekBackward), "Step Out (Shift+F11)", self)
-        step_out_action.setShortcut("Shift+F11")
-        # step_out_action.triggered.connect(self.debug_step_out) # Placeholder
-        self.debugger_toolbar.addAction(step_out_action)
+        self.step_out_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekBackward), "Step Out (Shift+F11)", self)
+        self.step_out_action.setShortcut("Shift+F11")
+        self.step_out_action.triggered.connect(lambda: self.debug_manager.step_out()) # Connect to DebugManager
+        self.step_out_action.setEnabled(False)
+        self.debugger_toolbar.addAction(self.step_out_action)
 
-        stop_action = QAction(self.style().standardIcon(QStyle.SP_MediaStop), "Stop (Shift+F5)", self)
-        stop_action.setShortcut("Shift+F5")
-        # stop_action.triggered.connect(self.debug_stop) # Placeholder
-        self.debugger_toolbar.addAction(stop_action)
+        self.stop_action = QAction(self.style().standardIcon(QStyle.SP_MediaStop), "Stop (Shift+F5)", self)
+        self.stop_action.setShortcut("Shift+F5")
+        self.stop_action.triggered.connect(self.debug_manager.stop_session) # Connect to DebugManager
+        self.stop_action.setEnabled(False)
+        self.debugger_toolbar.addAction(self.stop_action)
 
         self.debugger_toolbar.setVisible(False)
 
@@ -393,12 +407,30 @@ class MainWindow(QMainWindow):
         self.language_selector.setFixedWidth(100) # Adjust width as needed
         toolbar.addWidget(self.language_selector)
 
-        # Play Button (QAction)
-        self.run_debug_action_button = QAction(QIcon.fromTheme("media-playback-start"), "Run Code", self) # Tooltip updated
-        self.run_debug_action_button.setToolTip("Run Code (F5)")
-        self.run_debug_action_button.setShortcut("F5")
-        self.run_debug_action_button.triggered.connect(self._handle_run_request) # Connect to new handler
-        toolbar.addAction(self.run_debug_action_button)
+        # Run Action Button
+        self.run_action_button = QAction(QIcon.fromTheme("media-playback-start"), "Run Code (F5)", self)
+        self.run_action_button.setToolTip("Run Code (F5)")
+        self.run_action_button.setShortcut("F5") # Kept F5 for simple run
+        self.run_action_button.triggered.connect(self._handle_run_request)
+        toolbar.addAction(self.run_action_button)
+
+        # Debug Action Button
+        # Using SP_DialogYesButton as a placeholder, replace with a proper debug icon if available
+        debug_icon = self.style().standardIcon(QStyle.SP_DialogYesButton)
+        try:
+            # Try to get a more specific debug icon if the theme provides it
+            if QIcon.hasThemeIcon("debug-run"):
+                debug_icon = QIcon.fromTheme("debug-run")
+            elif QIcon.hasThemeIcon("system-run"): # Fallback if debug-run not found
+                 debug_icon = QIcon.fromTheme("system-run")
+        except Exception as e:
+            print(f"Could not load debug icon: {e}")
+
+        self.debug_action_button = QAction(debug_icon, "Debug Code (Ctrl+F5)", self)
+        self.debug_action_button.setToolTip("Debug Code (Ctrl+F5)")
+        self.debug_action_button.setShortcut("Ctrl+F5") # New shortcut for debug
+        self.debug_action_button.triggered.connect(self._handle_debug_request)
+        toolbar.addAction(self.debug_action_button)
 
         # Add other buttons to the toolbar
         self.request_control_button = QPushButton("Request Control", self)
@@ -939,8 +971,17 @@ class MainWindow(QMainWindow):
                 self.breakpoints_panel.addItem(QListWidgetItem(f"{path_basename}:{line}"))
 
         # Trigger gutter re-render on the current editor's gutter
-        # The editor instance is CodeEditor(QWidget), so editor.gutter is correct.
         editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set()))
+
+        # Also update DebugManager's internal list and the adapter if a session is active
+        lines_for_file = self.active_breakpoints.get(file_path, set())
+        self.debug_manager.update_internal_breakpoints(file_path, lines_for_file)
+
+        # Check if DAP client is connected and handshake is complete before sending to adapter
+        if self.debug_manager.dap_client and \
+           self.debug_manager.dap_client.isOpen() and \
+           self.debug_manager._dap_request_pending_response.get('handshake_complete', False):
+            self.debug_manager.set_breakpoints_on_adapter(file_path, list(lines_for_file))
 
 
     @Slot(str, str) # path, error_message
@@ -1771,3 +1812,119 @@ class MainWindow(QMainWindow):
                 self.undo_action.setEnabled(False)
             if hasattr(self, 'redo_action'):
                 self.redo_action.setEnabled(False)
+
+    # --- Debugger Integration Slots ---
+    @Slot()
+    def _handle_debug_request(self):
+        editor = self._get_current_code_editor()
+        if not editor:
+            QMessageBox.information(self, "Debug", "No active editor to debug.")
+            return
+
+        file_path = editor.file_path # Using the proxied property
+        if not file_path or file_path.startswith("untitled:"):
+            QMessageBox.warning(self, "Debug", "Please save the file before debugging.")
+            return
+
+        if not self.save_current_file(): # Ensure latest version is saved
+            QMessageBox.warning(self, "Debug", "Save operation cancelled or failed. Debug aborted.")
+            return
+
+        # Update DebugManager's internal list of breakpoints for all known files
+        # This ensures DebugManager has the latest set before starting.
+        for path, lines_set in self.active_breakpoints.items():
+            self.debug_manager.update_internal_breakpoints(path, lines_set)
+
+        # Start the debug session via DebugManager
+        self.debug_manager.start_session(file_path)
+
+    @Slot()
+    def _on_debug_session_started(self):
+        print("MainWindow: Debug session started.")
+        self.debugger_toolbar.setVisible(True)
+        self.run_action_button.setEnabled(False)
+        self.debug_action_button.setEnabled(False)
+
+        # Initial state of debugger controls
+        self.continue_action.setEnabled(True) # Typically debugger starts paused at entry or first breakpoint
+        self.step_over_action.setEnabled(False) # Disabled until actually paused
+        self.step_into_action.setEnabled(False)
+        self.step_out_action.setEnabled(False)
+        self.stop_action.setEnabled(True)
+
+
+    @Slot()
+    def _on_debug_session_stopped(self):
+        print("MainWindow: Debug session stopped.")
+        self.debugger_toolbar.setVisible(False)
+        self.run_action_button.setEnabled(True)
+        self.debug_action_button.setEnabled(True)
+
+        # Clear debugger UI panels
+        self.variables_panel.clear()
+        # Re-add the "Locals" placeholder or other top-level items if necessary
+        self.variables_panel.addTopLevelItem(QTreeWidgetItem(self.variables_panel, ["Locals"]))
+        self.call_stack_panel.clear()
+        # Breakpoints panel (self.breakpoints_panel) should retain its state as breakpoints are persistent
+
+    @Slot(int, str, list, list)
+    def _on_debugger_paused(self, thread_id: int, reason: str, call_stack: list, variables: list):
+        print(f"MainWindow: Debugger paused. Thread: {thread_id}, Reason: {reason}")
+
+        self.call_stack_panel.clear()
+        for frame in call_stack:
+            # Format: {'id': frame_id, 'name': frame_name, 'file': file_path, 'line': line_num}
+            item_text = f"{os.path.basename(frame['file'])}:{frame['line']} - {frame['name']}"
+            self.call_stack_panel.addItem(QListWidgetItem(item_text))
+
+        self.variables_panel.clear() # Clear previous variables
+        # For simplicity, add all variables under a "Locals" or "Current Scope" top-level item
+        # Later, this can be more structured based on scopes from DAP
+
+        # Example: Grouping all variables under a "Variables" top-level item
+        # More sophisticated handling would use the actual scope names.
+        # For now, a flat list is displayed.
+        if not variables:
+            placeholder_item = QTreeWidgetItem(self.variables_panel, ["No variables in current scope."])
+            self.variables_panel.addTopLevelItem(placeholder_item)
+        else:
+            for var in variables:
+                # Format: {'name': var_name, 'type': var_type, 'value': var_value, 'variablesReference': ref_id}
+                var_item = QTreeWidgetItem([var['name'], var['value'], var['type']])
+                # TODO: Handle expandable variables using var['variablesReference'] > 0 in a future step
+                self.variables_panel.addTopLevelItem(var_item)
+        self.variables_panel.expandAll() # Optional: expand all variable items
+
+        # Update debugger toolbar actions
+        self.continue_action.setEnabled(True)
+        self.step_over_action.setEnabled(True)
+        self.step_into_action.setEnabled(True)
+        self.step_out_action.setEnabled(True)
+        self.stop_action.setEnabled(True)
+
+        # Bring window to front and focus relevant debugger panel
+        self.activateWindow()
+        self.raise_()
+        if self.left_tab_widget:
+            # Find the "Debugger" tab index and switch to it
+            for i in range(self.left_tab_widget.count()):
+                if self.left_tab_widget.tabText(i) == "Debugger":
+                    self.left_tab_widget.setCurrentIndex(i)
+                    break
+
+
+    @Slot()
+    def _on_debugger_resumed(self):
+        print("MainWindow: Debugger resumed.")
+        # Clear variable and call stack panels as the program is running
+        self.variables_panel.clear()
+        self.variables_panel.addTopLevelItem(QTreeWidgetItem(self.variables_panel, ["Running..."]))
+        self.call_stack_panel.clear()
+        self.call_stack_panel.addItem(QListWidgetItem("Running..."))
+
+        # Update debugger toolbar actions
+        self.continue_action.setEnabled(False) # Can't continue if already running
+        self.step_over_action.setEnabled(False)
+        self.step_into_action.setEnabled(False)
+        self.step_out_action.setEnabled(False)
+        self.stop_action.setEnabled(True) # Stop is always available
