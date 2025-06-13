@@ -40,12 +40,12 @@ class PythonHighlighter(QSyntaxHighlighter):
         try:
             offset = 0
             for item in self.lexer.get_tokens_unprocessed(text):
-                if not (isinstance(item, tuple) and len(item) == 2):
+                if not (isinstance(item, tuple) and len(item) == 3):
                     import sys
-                    print(f"Pygments token error: Expected a 2-tuple, got {repr(item)}", file=sys.stderr)
+                    print(f"Pygments token error: Expected a 3-tuple, got {repr(item)}", file=sys.stderr)
                     continue
 
-                token, content = item
+                idx, token, content = item # Unpack idx, token, and content
                 token_type = str(token).split('.')[-1].lower() # e.g., 'Token.Keyword' -> 'keyword'
                 
                 # Map Pygments token types to our defined formats
