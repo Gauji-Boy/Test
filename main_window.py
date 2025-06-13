@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit, QStyle, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem
 from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QActionGroup, QFont
 from PySide6.QtCore import Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject, QProcess
 from file_explorer import FileExplorer
@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self.current_run_mode = "Run" # Initial run mode
         self.setup_status_bar() # Initialize status bar labels first
         self.setup_toolbar() # Re-enable toolbar for the new button
+        self.setup_debugger_toolbar() # Add this line
         self.setup_ui()
         self.setup_menu()
         self.setup_network_connections() # Setup network signals and slots
@@ -88,6 +89,38 @@ class MainWindow(QMainWindow):
         self.pending_initial_path = initial_path # Store for _handle_session_loaded
         self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded
 
+        self.active_breakpoints = {} # Stores path -> set of line numbers
+
+    def setup_debugger_toolbar(self):
+        self.debugger_toolbar = QToolBar("Debugger Toolbar", self)
+        self.addToolBar(Qt.TopToolBarArea, self.debugger_toolbar)
+
+        continue_action = QAction(self.style().standardIcon(QStyle.SP_MediaPlay), "Continue (F5)", self)
+        continue_action.setShortcut("F5")
+        # continue_action.triggered.connect(self.debug_continue) # Placeholder
+        self.debugger_toolbar.addAction(continue_action)
+
+        step_over_action = QAction(self.style().standardIcon(QStyle.SP_MediaSkipForward), "Step Over (F10)", self)
+        step_over_action.setShortcut("F10")
+        # step_over_action.triggered.connect(self.debug_step_over) # Placeholder
+        self.debugger_toolbar.addAction(step_over_action)
+
+        step_into_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekForward), "Step Into (F11)", self)
+        step_into_action.setShortcut("F11")
+        # step_into_action.triggered.connect(self.debug_step_into) # Placeholder
+        self.debugger_toolbar.addAction(step_into_action)
+
+        step_out_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekBackward), "Step Out (Shift+F11)", self)
+        step_out_action.setShortcut("Shift+F11")
+        # step_out_action.triggered.connect(self.debug_step_out) # Placeholder
+        self.debugger_toolbar.addAction(step_out_action)
+
+        stop_action = QAction(self.style().standardIcon(QStyle.SP_MediaStop), "Stop (Shift+F5)", self)
+        stop_action.setShortcut("Shift+F5")
+        # stop_action.triggered.connect(self.debug_stop) # Placeholder
+        self.debugger_toolbar.addAction(stop_action)
+
+        self.debugger_toolbar.setVisible(False)
 
     def initialize_project(self, path: str, add_to_recents: bool = True):
         """Initializes the project by setting the file explorer root and opening the terminal.
@@ -98,19 +131,19 @@ class MainWindow(QMainWindow):
             # Open a single, empty "Untitled" tab.
             self.open_new_tab() # Use open_new_tab which handles None path for untitled
             # Hide the file explorer as there is no project context.
-            if hasattr(self, 'file_explorer_dock'): # Check if file_explorer_dock exists
-                self.file_explorer_dock.setVisible(False)
+            if hasattr(self, 'left_dock_widget'): # Check if left_dock_widget exists
+                self.left_dock_widget.setVisible(False)
             return # Stop further processing
 
         import os
         if os.path.isdir(path):
             self.file_explorer.set_root_path(path)
             # Ensure file explorer is visible if it was hidden
-            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
-                self.file_explorer_dock.setVisible(True)
+            if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
+                self.left_dock_widget.setVisible(True)
             # Ensure file explorer is visible
-            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
-                self.file_explorer_dock.setVisible(True)
+            if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
+                self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
                 self.add_recent_project(path) # Add to recent projects
@@ -119,8 +152,8 @@ class MainWindow(QMainWindow):
             if parent_dir:
                 self.file_explorer.set_root_path(parent_dir)
                 # Ensure file explorer is visible
-                if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
-                    self.file_explorer_dock.setVisible(True)
+                if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
+                    self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
                     self.add_recent_project(parent_dir) # Add parent directory to recent projects
@@ -129,8 +162,8 @@ class MainWindow(QMainWindow):
                 current_dir = os.getcwd()
                 self.file_explorer.set_root_path(current_dir)
                 # Ensure file explorer is visible
-                if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
-                    self.file_explorer_dock.setVisible(True)
+                if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
+                    self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
                     self.add_recent_project(current_dir) # Add current directory to recent projects
@@ -141,8 +174,8 @@ class MainWindow(QMainWindow):
             default_path = os.path.expanduser("~")
             self.file_explorer.set_root_path(default_path)
             # Ensure file explorer is visible
-            if hasattr(self, 'file_explorer_dock') and not self.file_explorer_dock.isVisible():
-                self.file_explorer_dock.setVisible(True)
+            if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
+                self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
                 self.add_recent_project(default_path) # Add default path to recent projects
@@ -156,16 +189,46 @@ class MainWindow(QMainWindow):
         self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
         self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions
 
-        # File Explorer Panel (Left Sidebar)
-        self.file_explorer_dock = QDockWidget("File Explorer", self)
-        self.file_explorer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.file_explorer = FileExplorer()
-        self.file_explorer_dock.setWidget(self.file_explorer)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
+        # --- Debugger Panel Setup ---
+        # Main widget and layout for the debugger panel
+        debugger_main_widget = QWidget()
+        debugger_layout = QVBoxLayout(debugger_main_widget)
+
+        # Variables Panel
+        self.variables_panel = QTreeWidget()
+        self.variables_panel.setHeaderLabels(["Variable", "Value", "Type"])
+        locals_item = QTreeWidgetItem(self.variables_panel, ["Locals"])
+        self.variables_panel.addTopLevelItem(locals_item)
+        debugger_layout.addWidget(self.variables_panel)
+
+        # Call Stack Panel
+        self.call_stack_panel = QListWidget()
+        self.call_stack_panel.addItem(QListWidgetItem("main.py:10 - <module>")) # Placeholder
+        debugger_layout.addWidget(self.call_stack_panel)
+
+        # Breakpoints Panel
+        self.breakpoints_panel = QListWidget()
+        debugger_layout.addWidget(self.breakpoints_panel)
+
+        # Store debugger_main_widget for later use in tab creation
+        self.debugger_main_widget = debugger_main_widget
+
+        # --- File Explorer Setup (modified for tabbing) ---
+        self.file_explorer = FileExplorer() # Create the FileExplorer widget instance
         # Connect FileExplorer's file_opened signal to MainWindow's open_new_tab method
         self.file_explorer.file_opened.connect(self.open_new_tab)
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
+
+        # --- Tabbed Dock Widget for File Explorer and Debugger ---
+        self.left_tab_widget = QTabWidget()
+        self.left_tab_widget.addTab(self.file_explorer, "File Explorer") # Add FileExplorer widget
+        self.left_tab_widget.addTab(self.debugger_main_widget, "Debugger")
+
+        self.left_dock_widget = QDockWidget("Explorer/Debugger", self) # This is the new main left dock
+        self.left_dock_widget.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.left_dock_widget.setWidget(self.left_tab_widget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.left_dock_widget)
 
         # Integrated Terminal Panel (Bottom Dock)
         self.terminal_dock = QDockWidget("Terminal", self) # Renamed dock title
@@ -463,6 +526,13 @@ class MainWindow(QMainWindow):
                     self.language_selector.setCurrentIndex(plain_text_idx)
                 elif self.language_selector.count() > 0: # Fallback to first item if "Plain Text" not found
                     self.language_selector.setCurrentIndex(0)
+
+            # Update breakpoint display for the current editor if it's a CodeEditor
+            if isinstance(editor, CodeEditor):
+                file_path = editor.file_path # Relies on CodeEditor having file_path property
+                current_file_breakpoints = self.active_breakpoints.get(file_path, set())
+                editor.gutter.update_breakpoints_display(current_file_breakpoints)
+            # If not a CodeEditor, no gutter to update.
 
     @Slot()
     def join_session_from_welcome_page(self):
@@ -789,6 +859,9 @@ class MainWindow(QMainWindow):
             # For a brand new untitled tab, it should show as dirty.
             self._handle_dirty_status_changed(untitled_path_placeholder, True)
 
+            # Connect breakpoint toggled signal for new untitled editor
+            editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled)
+
 
     @Slot(str, str) # path, content
     def _handle_file_opened(self, path, content):
@@ -828,11 +901,47 @@ class MainWindow(QMainWindow):
         editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
         editor.language_changed_signal.connect(self._update_language_label)
         editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
+        editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled) # Connect signal
 
         self._update_status_bar_and_language_selector_on_tab_change(new_tab_index)
         self.update_editor_read_only_state()
         self._update_undo_redo_actions()
         self.status_bar.showMessage(f"Opened {path}", 2000)
+
+    @Slot(int)
+    def _handle_breakpoint_toggled(self, line_number):
+        editor = self._get_current_code_editor()
+        if not editor:
+            return
+
+        # Use the file_path property from the CodeEditor (QWidget)
+        file_path = editor.file_path
+
+        if not file_path or file_path.startswith("untitled:"):
+            QMessageBox.warning(self, "Breakpoints", "Please save the file before setting breakpoints.")
+            return
+
+        if file_path not in self.active_breakpoints:
+            self.active_breakpoints[file_path] = set()
+
+        if line_number in self.active_breakpoints[file_path]:
+            self.active_breakpoints[file_path].remove(line_number)
+        else:
+            self.active_breakpoints[file_path].add(line_number)
+
+        # Update the Breakpoints Panel
+        self.breakpoints_panel.clear()
+        for path, lines in self.active_breakpoints.items():
+            if not lines: # Skip if no lines for this path, or if lines is None
+                continue
+            path_basename = os.path.basename(path) # Get basename for display
+            for line in sorted(list(lines)):
+                self.breakpoints_panel.addItem(QListWidgetItem(f"{path_basename}:{line}"))
+
+        # Trigger gutter re-render on the current editor's gutter
+        # The editor instance is CodeEditor(QWidget), so editor.gutter is correct.
+        editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set()))
+
 
     @Slot(str, str) # path, error_message
     def _handle_file_open_error(self, path, error_message):
