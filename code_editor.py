@@ -113,6 +113,14 @@ class CodeEditor(QPlainTextEdit):
         self.linter_timer.start()
         print("LOG: CodeEditor._update_language_and_highlighting - Exit")
 
+    def set_file_path_and_update_language(self, file_path):
+        """
+        Sets the file path for the editor and triggers language detection and highlighting.
+        This method should be called when a new file is opened or saved.
+        """
+        self.file_path = file_path
+        self._update_language_and_highlighting()
+
     def _emit_cursor_position(self):
         print("LOG: CodeEditor._emit_cursor_position - Entry")
         cursor = self.textCursor()
