@@ -495,8 +495,20 @@ class CodeEditor(QWidget): # Now inherits QWidget
 
     @file_path.setter
     def file_path(self, value):
-        self.text_edit.file_path = value # This might trigger updates if _InternalCodeEditor's setter does
-        # Consider if _update_language_and_highlighting needs to be called here or if it's handled by internal setter
+        self.text_edit.file_path = value
+        # The actual update of language/highlighting is handled within _InternalCodeEditor
+        # when set_file_path_and_update_language is called, or by textChanged.
+        # If direct setting of file_path should also trigger it, logic would be needed in _InternalCodeEditor's setter or here.
+
+    @property
+    def current_language(self):
+        return self.text_edit.current_language
+
+    @current_language.setter
+    def current_language(self, value):
+        self.text_edit.current_language = value
+        # Potentially trigger a language_changed_signal if this setter is used externally
+        # and needs to notify other components, though typically language changes via _update_language_and_highlighting.
 
     # Proxy any other methods that MainWindow or other components might call on CodeEditor
     # For example, if MainWindow used editor.clear(), you'd add:
