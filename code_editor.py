@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QPlainTextEdit, QCompleter, QApplication, QTextEdit, QWidget, QHBoxLayout
 from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QKeyEvent, QFont, QSyntaxHighlighter, QPainter
-from PySide6.QtCore import Qt, QTimer, QStringListModel, QRect, QRegularExpression, QFileInfo, Signal, Slot, QPoint
+from PySide6.QtCore import Qt, QTimer, QStringListModel, QRect, QRegularExpression, QFileInfo, Signal, Slot, QPoint, QSize
 import json
 import os
 import sys
@@ -10,6 +10,79 @@ from PySide6.QtCore import QThreadPool # Import QThreadPool
 from worker_threads import JediCompletionWorker, PyflakesLinterWorker, WorkerSignals
 
 from python_highlighter import PythonHighlighter # Import the dedicated highlighter
+
+
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self):
+        # Calculate width based on the maximum line number
+        block_count = self.editor.blockCount()
+        num_digits = len(str(max(1, block_count)))
+        # Use fontMetrics().horizontalAdvance('9') * num_digits + padding
+        padding = 10 # Total padding (left+right)
+        width = self.fontMetrics().horizontalAdvance('9') * num_digits + padding
+        return QSize(width, 0)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        editor = self.editor
+
+        # Fill the background
+        bg_color_str = editor.theme_config.get("editor", {}).get("gutter_background", "#2c313a")
+        painter.fillRect(event.rect(), QColor(bg_color_str))
+
+        # Get the editor's font for drawing text
+        painter.setFont(editor.font())
+
+        # Set the pen color for text
+        line_num_fg_str = editor.theme_config.get("editor", {}).get("line_number_foreground", "#606366")
+        painter.setPen(QColor(line_num_fg_str))
+
+        # Determine the first visible block
+        first_block = editor.firstVisibleBlock()
+        current_block_number = editor.textCursor().blockNumber()
+
+        padding_right = 5 # Right padding for text
+
+        block = first_block
+        block_top_y_in_editor_viewport_prev = -1 # Initialize before loop
+
+        while block.isValid() and editor.blockBoundingGeometry(block).translated(editor.contentOffset()).top() <= event.rect().bottom() + editor.verticalScrollBar().value():
+            block_bounding_rect = editor.blockBoundingGeometry(block).translated(editor.contentOffset())
+            block_top_y_in_editor_viewport = block_bounding_rect.top() - editor.verticalScrollBar().value()
+
+            if block_top_y_in_editor_viewport + block_bounding_rect.height() < event.rect().top():
+                block = block.next()
+                continue
+
+            # Wrapped line check: Skip drawing if this block's top is same as previously drawn one
+            if int(block_top_y_in_editor_viewport) == int(block_top_y_in_editor_viewport_prev):
+                block = block.next()
+                continue
+
+            line_num = block.blockNumber() + 1
+
+            # Highlight current line
+            if block.blockNumber() == current_block_number:
+                highlight_color_str = editor.theme_config.get("editor", {}).get("current_line_gutter_background", "#3a3f4b")
+                # Ensure highlight_rect uses integer coordinates
+                highlight_rect = QRect(0, int(block_top_y_in_editor_viewport), self.width(), editor.fontMetrics().height())
+                painter.fillRect(highlight_rect, QColor(highlight_color_str))
+
+            # Draw line number
+            painter.drawText(
+                0, int(block_top_y_in_editor_viewport),
+                self.width() - padding_right, editor.fontMetrics().height(),
+                Qt.AlignRight, str(line_num)
+            )
+
+            block_top_y_in_editor_viewport_prev = block_top_y_in_editor_viewport # Update for next iteration's check
+
+            block = block.next()
+
 
 class BreakpointGutter(QWidget):
     breakpoint_toggled = Signal(int)
@@ -443,14 +516,22 @@ class CodeEditor(QWidget): # Now inherits QWidget
         super().__init__(parent)
 
         self.text_edit = _InternalCodeEditor(self) # Create the internal editor
-        self.gutter = BreakpointGutter(self.text_edit) # Pass the internal editor to the gutter
+        self.line_number_area = LineNumberArea(self.text_edit) # Line numbers
+        self.gutter = BreakpointGutter(self.text_edit) # Breakpoints
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        layout.addWidget(self.line_number_area)
         layout.addWidget(self.gutter)
         layout.addWidget(self.text_edit)
         self.setLayout(layout)
+
+        # Connect signals for LineNumberArea
+        self.text_edit.blockCountChanged.connect(self._update_line_number_area_width_and_repaint) # For width changes and repaint
+        self.text_edit.updateRequest.connect(self._on_editor_update_request_for_line_numbers)
+        self.text_edit.verticalScrollBar().valueChanged.connect(self.line_number_area.update)
+        self.text_edit.cursorPositionChanged.connect(self.line_number_area.update) # For current line highlight
 
         # Proxy signals from internal editor to CodeEditor's signals
         self.text_edit.textChanged.connect(self.textChanged)
@@ -463,6 +544,63 @@ class CodeEditor(QWidget): # Now inherits QWidget
 
         # Connect the standard cursorPositionChanged signal
         self.text_edit.cursorPositionChanged.connect(self.cursorPositionChanged)
+
+    def _update_line_number_area_width_and_repaint(self):
+        if self.line_number_area: # Check if it exists, good practice
+            self.line_number_area.updateGeometry()
+            self.line_number_area.update()
+
+    def _on_editor_update_request_for_line_numbers(self, rect, dy):
+        # This slot is connected to QPlainTextEdit's updateRequest.
+        # rect is the area to update in viewport coordinates.
+        # dy is the amount of vertical shift.
+        if dy != 0:
+            # If scrolled, the entire visible part of the gutter might need repaint.
+            # self.line_number_area.update() # This would repaint the whole thing
+            self.line_number_area.scroll(0, dy) # Scroll the existing content
+        else:
+            # If no scroll, update only the corresponding part of the gutter.
+            # For simplicity, update the whole gutter. A more optimized version would translate 'rect'.
+            # self.line_number_area.update()
+            # Update the part of the line number area corresponding to the editor's rect.
+            # The update call will use event.rect() in paintEvent to limit painting.
+             self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+
+    def set_exec_highlight(self, line_number: int | None):
+        if not hasattr(self, 'text_edit'): # Should always exist, but good check
+            return
+
+        if line_number is None:
+            self.text_edit.setExtraSelections([])
+            return
+
+        # Assuming line_number is 1-based as typically provided by debuggers
+        # QPlainTextEdit/QTextDocument work with 0-based block numbers
+        target_block_number = line_number - 1
+        if target_block_number < 0:
+            self.text_edit.setExtraSelections([]) # Invalid line number, clear highlights
+            return
+
+        selection = QTextEdit.ExtraSelection()
+
+        # Define the format for the highlight
+        highlight_format = QTextCharFormat()
+        highlight_format.setBackground(QColor("#3a3d41"))
+        highlight_format.setProperty(QTextCharFormat.FullWidthSelection, True)
+
+        selection.format = highlight_format
+
+        # Set the cursor for the selection
+        # Move cursor to the beginning of the specified block number
+        block = self.text_edit.document().findBlockByNumber(target_block_number)
+        if block.isValid():
+            cursor = QTextCursor(block)
+            # No need to movePosition, cursor for block is already at start.
+            selection.cursor = cursor
+            self.text_edit.setExtraSelections([selection])
+        else:
+            # Block not valid (e.g., line number out of range), clear previous highlights
+            self.text_edit.setExtraSelections([])
 
     # --- Proxy Methods to _InternalCodeEditor ---
     def toPlainText(self):

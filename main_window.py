@@ -1866,6 +1866,11 @@ class MainWindow(QMainWindow):
         self.call_stack_panel.clear()
         # Breakpoints panel (self.breakpoints_panel) should retain its state as breakpoints are persistent
 
+        # Clear execution highlight from all open editors
+        for editor in self.path_to_editor.values():
+            if isinstance(editor, CodeEditor): # Ensure it's a CodeEditor instance
+                editor.set_exec_highlight(None)
+
     @Slot(int, str, list, list)
     def _on_debugger_paused(self, thread_id: int, reason: str, call_stack: list, variables: list):
         print(f"MainWindow: Debugger paused. Thread: {thread_id}, Reason: {reason}")
@@ -1894,6 +1899,21 @@ class MainWindow(QMainWindow):
                 self.variables_panel.addTopLevelItem(var_item)
         self.variables_panel.expandAll() # Optional: expand all variable items
 
+        # Highlight current execution line
+        active_editor = self._get_current_code_editor()
+        if call_stack: # Check if call_stack is not empty
+            current_frame = call_stack[0]
+            file_path = current_frame['file']
+            line_number = current_frame['line']
+            if active_editor and active_editor.file_path == file_path:
+                active_editor.set_exec_highlight(line_number)
+            elif active_editor: # Current editor is not the file being debugged, or file not open
+                active_editor.set_exec_highlight(None)
+            # If no active_editor, nothing to highlight or clear for now.
+            # If a file becomes active later, its highlight state will be managed then.
+        elif active_editor: # No call_stack, but there is an active editor, clear its highlight
+            active_editor.set_exec_highlight(None)
+
         # Update debugger toolbar actions
         self.continue_action.setEnabled(True)
         self.step_over_action.setEnabled(True)
@@ -1920,6 +1940,11 @@ class MainWindow(QMainWindow):
         self.variables_panel.addTopLevelItem(QTreeWidgetItem(self.variables_panel, ["Running..."]))
         self.call_stack_panel.clear()
         self.call_stack_panel.addItem(QListWidgetItem("Running..."))
+
+        # Clear execution highlight
+        active_editor = self._get_current_code_editor()
+        if active_editor:
+            active_editor.set_exec_highlight(None)
 
         # Update debugger toolbar actions
         self.continue_action.setEnabled(False) # Can't continue if already running
