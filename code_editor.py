@@ -433,10 +433,11 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
 class CodeEditor(QWidget): # Now inherits QWidget
     # Define signals that will be proxied from _InternalCodeEditor
     textChanged = Signal()
-    cursor_position_changed_signal = Signal(int, int)
+    cursor_position_changed_signal = Signal(int, int) # This is the custom one with line/col numbers
     language_changed_signal = Signal(str)
     control_reclaim_requested = Signal()
     breakpoint_toggled = Signal(int) # Signal for breakpoint toggles from the gutter
+    cursorPositionChanged = Signal() # Standard Qt signal, proxied
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -459,6 +460,9 @@ class CodeEditor(QWidget): # Now inherits QWidget
 
         # Connect gutter's breakpoint_toggled signal to CodeEditor's breakpoint_toggled signal
         self.gutter.breakpoint_toggled.connect(self.breakpoint_toggled)
+
+        # Connect the standard cursorPositionChanged signal
+        self.text_edit.cursorPositionChanged.connect(self.cursorPositionChanged)
 
     # --- Proxy Methods to _InternalCodeEditor ---
     def toPlainText(self):
