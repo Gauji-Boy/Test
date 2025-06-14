@@ -49,7 +49,7 @@ class FileManager(QObject):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             self.open_files_data[path] = {
                 "content_on_disk": content, # Store what was read from disk
                 "is_dirty": False
@@ -76,28 +76,28 @@ class FileManager(QObject):
                 final_content_to_save = formatted_content
             except black.NothingChanged:
                 final_content_to_save = content_to_save
-            except black.InvalidInput as iie: 
+            except black.InvalidInput as iie:
                 self.error_occurred.emit("Formatting Error", f"Syntax error in Python code. Cannot format and save '{os.path.basename(path_to_save_to)}':\n{iie}")
-                return False 
+                return False
             except Exception as e:
                 print(f"Warning: Black formatting failed for '{path_to_save_to}', saving unformatted: {e}")
-        
+
         try:
             with open(path_to_save_to, 'w', encoding='utf-8') as f:
                 f.write(final_content_to_save)
 
             if current_path != path_to_save_to and current_path in self.open_files_data:
-                del self.open_files_data[current_path] 
+                del self.open_files_data[current_path]
 
             self.open_files_data[path_to_save_to] = {
                 "content_on_disk": final_content_to_save,
                 "is_dirty": False
             }
-            
+
             self.file_saved.emit(path_to_save_to, final_content_to_save)
-            self.dirty_status_changed.emit(path_to_save_to, False) 
+            self.dirty_status_changed.emit(path_to_save_to, False)
             print(f"FileManager: Saved '{path_to_save_to}'")
-            return True 
+            return True
         except Exception as e:
             self.error_occurred.emit("File Save Error", f"Could not save file '{path_to_save_to}':\n{e}")
             return False
@@ -105,7 +105,7 @@ class FileManager(QObject):
     @Slot(str)
     def close_file_requested(self, path: str):
         if path in self.open_files_data:
-            self.file_closed_in_editor.emit(path) 
+            self.file_closed_in_editor.emit(path)
             print(f"FileManager: Close requested for '{path}', UI can proceed to remove tab.")
         else:
             print(f"FileManager: Warning - close_file_requested for path not in open_files_data: {path}")
@@ -130,7 +130,7 @@ class FileManager(QObject):
                 self.open_files_data[path]["is_dirty"] = is_dirty
                 self.dirty_status_changed.emit(path, is_dirty)
                 print(f"FileManager: Dirty status for '{path}' changed to {is_dirty}")
-        elif is_dirty: 
+        elif is_dirty:
             self.dirty_status_changed.emit(path, is_dirty) # For new/untitled files not yet in open_files_data
             print(f"FileManager: Dirty status for (potentially new) '{path}' changed to {is_dirty}")
 
@@ -149,7 +149,7 @@ class FileManager(QObject):
     def load_open_files_from_session(self, files_to_open_paths: list):
         for path in files_to_open_paths:
             if os.path.exists(path):
-                self.open_file(path) 
+                self.open_file(path)
             else:
                 self.error_occurred.emit("Session Load Warning", f"File from last session not found: {path}")
 
@@ -194,13 +194,13 @@ class FileManager(QObject):
         try:
             os.rename(old_path, new_path)
             print(f"FileManager: Renamed '{old_path}' to '{new_path}'")
-            
+
             # If the renamed item was an open file, update its tracking in open_files_data
             if old_path in self.open_files_data:
                 file_data = self.open_files_data.pop(old_path)
                 self.open_files_data[new_path] = file_data
                 # Also need to inform MainWindow to update tab if it's open
-            
+
             self.item_renamed.emit(old_path, new_path)
             return True
         except Exception as e:
@@ -222,9 +222,9 @@ class FileManager(QObject):
                 os.rmdir(path_to_delete) # This will fail if directory is not empty
             else: # It's a file
                 os.remove(path_to_delete)
-            
+
             print(f"FileManager: Deleted '{path_to_delete}'")
-            
+
             # If the deleted item was an open file, clean up its tracking
             if path_to_delete in self.open_files_data:
                 # This implies the file was deleted from disk while open in editor.

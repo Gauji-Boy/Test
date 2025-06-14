@@ -65,7 +65,7 @@ class ProcessManager(QObject):
     def _on_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         # Read any remaining output
         self._on_ready_read_standard_output()
-        
+
         self.process_finished.emit(exit_code, exit_status)
         status_str = "normally" if exit_status == QProcess.NormalExit else "crashed"
         print(f"ProcessManager: Process finished {status_str} with exit code {exit_code}.")
@@ -81,13 +81,13 @@ class ProcessManager(QObject):
             QProcess.UnknownError: "Unknown error"
         }
         error_string = error_map.get(error, "An unspecified error occurred")
-        
+
         # Try to get more details from the process if available
         if self.process:
             native_error_details = self.process.errorString()
             if native_error_details:
                 error_string += f": {native_error_details}"
-        
+
         self.process_error.emit(error_string)
         print(f"ProcessManager: Process error - {error_string}")
         self.process = None # Allow new process execution

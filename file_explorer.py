@@ -1,6 +1,6 @@
 import os
 from PySide6.QtWidgets import (
-    QWidget, QTreeView, QVBoxLayout, QFileSystemModel, QMenu, 
+    QWidget, QTreeView, QVBoxLayout, QFileSystemModel, QMenu,
     QMessageBox, QInputDialog, QLineEdit, QApplication # QApplication for test block
 )
 from PySide6.QtGui import QAction, QIcon, QKeySequence # QKeySequence for future shortcuts
@@ -21,7 +21,7 @@ class FileExplorer(QWidget):
 
         self.tree_view = QTreeView(self)
         self.model = QFileSystemModel(self)
-        
+
         self.model.setFilter(QDir.AllEntries | QDir.Hidden | QDir.System) # Show all, including hidden
         self.model.setResolveSymlinks(True)
 
@@ -42,7 +42,7 @@ class FileExplorer(QWidget):
         layout.addWidget(self.tree_view)
         self.setLayout(layout)
 
-        self.current_root_path = "" 
+        self.current_root_path = ""
         self.set_root_path(QDir.homePath())
 
     @Slot(str)
@@ -51,9 +51,9 @@ class FileExplorer(QWidget):
         if not path or not os.path.isdir(path):
             print(f"FileExplorer: Invalid root path '{path}', defaulting to home.")
             valid_path = QDir.homePath()
-        
+
         self.current_root_path = os.path.normpath(valid_path)
-        self.model.setRootPath(self.current_root_path) 
+        self.model.setRootPath(self.current_root_path)
         root_index = self.model.index(self.current_root_path)
         self.tree_view.setRootIndex(root_index)
         self.tree_view.scrollTo(root_index, QTreeView.PositionAtTop)
@@ -86,34 +86,34 @@ class FileExplorer(QWidget):
                 target_path_for_new_item = path
             else:
                 target_path_for_new_item = os.path.dirname(path)
-        
+
         if path and not is_dir: # Item is a file
             open_action = menu.addAction("Open File")
             open_action.triggered.connect(lambda: self.file_open_requested.emit(path))
-        
+
         if path: # Actions for existing items (file or folder)
             menu.addSeparator()
             rename_action = menu.addAction("Rename...")
             rename_action.triggered.connect(lambda: self._request_rename_item(path))
-            
+
             delete_action = menu.addAction("Delete")
             delete_action.triggered.connect(lambda: self._request_delete_item(path))
-        
+
         menu.addSeparator() # Separator before create actions
         new_file_action = menu.addAction("New File...")
         new_file_action.triggered.connect(lambda: self._request_new_file(target_path_for_new_item))
 
         new_folder_action = menu.addAction("New Folder...")
         new_folder_action.triggered.connect(lambda: self._request_new_folder(target_path_for_new_item))
-            
+
         if path and is_dir: # Only show 'Open in Terminal' if a directory is selected
             menu.addSeparator()
             open_terminal_action = menu.addAction("Open in Terminal")
             open_terminal_action.triggered.connect(lambda: self.open_in_terminal_requested.emit(path))
-        
+
         if not menu.actions(): # Don't show empty menu (e.g. if path is None and no general actions)
             return
-            
+
         menu.exec(global_pos)
 
     def _request_new_file(self, parent_dir_path: str):
@@ -130,21 +130,21 @@ class FileExplorer(QWidget):
         # Or, FileExplorer can get new_name and emit (old_path, new_name).
         # Let's do the latter for consistency with delete's confirmation dialog.
         old_name = os.path.basename(old_path)
-        new_name, ok = QInputDialog.getText(self, "Rename Item", 
-                                            f"Enter new name for '{old_name}':", 
+        new_name, ok = QInputDialog.getText(self, "Rename Item",
+                                            f"Enter new name for '{old_name}':",
                                             QLineEdit.Normal, old_name)
         if ok and new_name and new_name != old_name:
             self.rename_item_requested.emit(old_path, new_name)
 
     def _request_delete_item(self, path_to_delete: str):
         item_name = os.path.basename(path_to_delete)
-        reply = QMessageBox.question(self, "Confirm Delete", 
+        reply = QMessageBox.question(self, "Confirm Delete",
                                      f"Are you sure you want to delete '{item_name}'?",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.delete_item_requested.emit(path_to_delete)
 
-    @Slot() 
+    @Slot()
     def refresh_path(self, path: str):
         """Refreshes a specific path in the model, usually a directory after changes."""
         if not path or not os.path.exists(path): # Path might have been deleted
@@ -168,7 +168,7 @@ class FileExplorer(QWidget):
             pass
 
 
-if __name__ == '__main__': 
+if __name__ == '__main__':
     import sys
     app = QApplication(sys.argv)
     # Example: Load stylesheet for testing

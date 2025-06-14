@@ -38,10 +38,10 @@ class SessionManager(QObject):
             base_config_path = app_data_path
             if os.path.basename(app_data_path).lower() != self.CONFIG_DIR_NAME.lower():
                  base_config_path = os.path.join(app_data_path, self.CONFIG_DIR_NAME)
-            
+
             if not os.path.exists(base_config_path):
                 os.makedirs(base_config_path, exist_ok=True)
-            
+
             return os.path.join(base_config_path, self.SESSION_FILE_NAME)
         except Exception as e:
             print(f"SessionManager: Error determining session file path: {e}")

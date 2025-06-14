@@ -37,7 +37,7 @@ def load_fonts():
     else:
         material_family = QFontDatabase.applicationFontFamilies(font_id_material)[0]
         print(f"Successfully loaded font: {material_family} (for icons)")
-    
+
     # Note: The actual font names to be used in QSS or programmatically
     # will be "Inter", "Fira Code", and "Material Symbols Outlined" (or similar,
     # depending on what QFontDatabase reports after loading the actual files).
