@@ -327,6 +327,37 @@ class MainWindow(QMainWindow):
             self._on_tab_close_requested(i)
             # If a tab closure was cancelled, it's tricky. For now, assume it tries all.
 
+    @Slot()
+    def _on_open_folder(self):
+        start_dir = QDir.homePath()
+        # Check if file_explorer exists and has the current_root_path attribute
+        if hasattr(self, 'file_explorer') and self.file_explorer and hasattr(self.file_explorer, 'current_root_path') and self.file_explorer.current_root_path:
+            start_dir = self.file_explorer.current_root_path
+
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Open Folder",
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+
+        if folder_path:
+            norm_folder_path = os.path.normpath(folder_path)
+            if hasattr(self, 'file_explorer') and self.file_explorer:
+                self.file_explorer.set_root_path(norm_folder_path)
+                self.setWindowTitle(f"Aether Editor - {os.path.basename(norm_folder_path)}")
+            else:
+                # Still set window title if file explorer isn't there for some reason
+                self.setWindowTitle(f"Aether Editor - {os.path.basename(norm_folder_path)}")
+
+            if hasattr(self, 'terminal_widget') and self.terminal_widget:
+                self.terminal_widget.start_shell(norm_folder_path)
+
+            self.status_bar.showMessage(f"Opened folder: {norm_folder_path}", 3000)
+            # Future: Add to recent projects list or similar session data
+        else:
+            self.status_bar.showMessage("Open folder cancelled.", 3000)
+
     @Slot(str, str, bool)
     def _on_file_opened_by_manager(self, path: str, content: str, is_dirty: bool):
         if path in self.editors_map:
