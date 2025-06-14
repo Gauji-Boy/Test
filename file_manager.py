@@ -30,6 +30,10 @@ class FileManager(QObject):
     # is_dirty: boolean indicating the new dirty state
     dirty_status_changed = Signal(str, bool)
 
+    item_created = Signal(str, bool)    # path, is_directory
+    item_renamed = Signal(str, str)     # old_path, new_path
+    item_deleted = Signal(str)          # path_deleted
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # {path: {"content_on_disk": str, "is_dirty": bool}}
@@ -148,3 +152,94 @@ class FileManager(QObject):
                 self.open_file(path)
             else:
                 self.error_occurred.emit("Session Load Warning", f"File from last session not found: {path}")
+
+    @Slot(str) # path should be the full path to the new file
+    def create_new_file(self, file_path: str):
+        if os.path.exists(file_path):
+            self.error_occurred.emit("Create File Error", f"File or folder already exists at '{file_path}'.")
+            return False
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write('') # Create empty file
+            print(f"FileManager: Created new file '{file_path}'")
+            self.item_created.emit(file_path, False) # False for is_directory
+            # QFileSystemModel should pick this up. No need to open it here.
+            return True
+        except Exception as e:
+            self.error_occurred.emit("Create File Error", f"Could not create file '{file_path}':\n{e}")
+            return False
+
+    @Slot(str) # path should be the full path to the new folder
+    def create_new_folder(self, folder_path: str):
+        if os.path.exists(folder_path):
+            self.error_occurred.emit("Create Folder Error", f"File or folder already exists at '{folder_path}'.")
+            return False
+        try:
+            os.makedirs(folder_path, exist_ok=True) # exist_ok=True is fine, though we check os.path.exists first
+            print(f"FileManager: Created new folder '{folder_path}'")
+            self.item_created.emit(folder_path, True) # True for is_directory
+            return True
+        except Exception as e:
+            self.error_occurred.emit("Create Folder Error", f"Could not create folder '{folder_path}':\n{e}")
+            return False
+
+    @Slot(str, str) # old_full_path, new_full_path (MainWindow will construct new_full_path)
+    def rename_item(self, old_path: str, new_path: str):
+        if not os.path.exists(old_path):
+            self.error_occurred.emit("Rename Error", f"Item to rename not found: '{old_path}'.")
+            return False
+        if os.path.exists(new_path):
+            self.error_occurred.emit("Rename Error", f"An item with the new name already exists: '{new_path}'.")
+            return False
+        try:
+            os.rename(old_path, new_path)
+            print(f"FileManager: Renamed '{old_path}' to '{new_path}'")
+
+            # If the renamed item was an open file, update its tracking in open_files_data
+            if old_path in self.open_files_data:
+                file_data = self.open_files_data.pop(old_path)
+                self.open_files_data[new_path] = file_data
+                # Also need to inform MainWindow to update tab if it's open
+
+            self.item_renamed.emit(old_path, new_path)
+            return True
+        except Exception as e:
+            self.error_occurred.emit("Rename Error", f"Could not rename '{os.path.basename(old_path)}':\n{e}")
+            return False
+
+    @Slot(str)
+    def delete_item(self, path_to_delete: str):
+        if not os.path.exists(path_to_delete):
+            self.error_occurred.emit("Delete Error", f"Item to delete not found: '{path_to_delete}'.")
+            return False
+        try:
+            if os.path.isdir(path_to_delete):
+                # Need to decide if we allow non-empty dir deletion or use shutil.rmtree
+                # For safety, os.rmdir only removes empty dirs. shutil.rmtree is destructive.
+                # Let's use os.rmdir for now and error if not empty.
+                # If it's an open file's directory, this could be problematic.
+                # Closing files within a directory before deleting the directory is MainWindow's job.
+                os.rmdir(path_to_delete) # This will fail if directory is not empty
+            else: # It's a file
+                os.remove(path_to_delete)
+
+            print(f"FileManager: Deleted '{path_to_delete}'")
+
+            # If the deleted item was an open file, clean up its tracking
+            if path_to_delete in self.open_files_data:
+                # This implies the file was deleted from disk while open in editor.
+                # MainWindow should handle closing the tab for this.
+                del self.open_files_data[path_to_delete]
+                # No need to call confirm_file_close as it's already gone from disk.
+
+            self.item_deleted.emit(path_to_delete)
+            return True
+        except OSError as oe:
+             if "Directory not empty" in str(oe):
+                 self.error_occurred.emit("Delete Error", f"Could not delete folder '{os.path.basename(path_to_delete)}': It is not empty.")
+             else:
+                 self.error_occurred.emit("Delete Error", f"Could not delete '{os.path.basename(path_to_delete)}':\n{oe}")
+             return False
+        except Exception as e:
+            self.error_occurred.emit("Delete Error", f"Could not delete '{os.path.basename(path_to_delete)}':\n{e}")
+            return False

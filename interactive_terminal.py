@@ -1,8 +1,8 @@
 import os
 import sys
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
-from PySide6.QtGui import QFont, QTextCursor, QPalette, QColor
-from PySide6.QtCore import QProcess, Signal, Slot, Qt, QKeyEvent
+from PySide6.QtGui import QFont, QTextCursor, QPalette, QColor, QKeyEvent
+from PySide6.QtCore import QProcess, Signal, Slot, Qt
 
 class InteractiveTerminal(QWidget):
     shell_terminated = Signal()

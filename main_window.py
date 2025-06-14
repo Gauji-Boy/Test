@@ -22,6 +22,7 @@ from session_manager import SessionManager
 # Import refactored CodeEditor and other UI components
 from code_editor import CodeEditor
 from interactive_terminal import InteractiveTerminal # Added import
+from file_explorer import FileExplorer # Added import
 
 class MainWindow(QMainWindow):
     EXTENSION_TO_LANGUAGE = {
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
 
         self.editors_map = {}
         self.untitled_counter = 0
+        self.file_explorer = None # Initialize file_explorer attribute
 
         self._setup_status_bar()
         self._setup_central_widget()
@@ -112,6 +114,11 @@ class MainWindow(QMainWindow):
         self.open_file_action.setShortcut(QKeySequence.Open)
         self.open_file_action.triggered.connect(self._on_open_file)
         file_menu.addAction(self.open_file_action)
+
+        self.open_folder_action = QAction(QIcon.fromTheme("folder-open"), "Open &Folder...", self)
+        self.open_folder_action.setShortcut(QKeySequence("Ctrl+Shift+O")) # Or another suitable shortcut
+        self.open_folder_action.triggered.connect(self._on_open_folder)
+        file_menu.addAction(self.open_folder_action)
 
         file_menu.addSeparator()
         self.save_file_action = QAction(QIcon.fromTheme("document-save"), "&Save", self)
@@ -181,6 +188,16 @@ class MainWindow(QMainWindow):
         # elif hasattr(self, 'view_menu'): # Check if view_menu exists as an attribute
         #    self.view_menu.addAction(self.terminal_dock.toggleViewAction())
 
+        # File Explorer Dock
+        self.file_explorer_dock = QDockWidget("File Explorer", self)
+        self.file_explorer_dock.setObjectName("FileExplorerDockWidget")
+        self.file_explorer = FileExplorer(self)
+        self.file_explorer_dock.setWidget(self.file_explorer)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.file_explorer_dock)
+        # Optionally, add to a View menu if one exists
+        # if hasattr(self, 'view_menu') and self.view_menu:
+        #     self.view_menu.addAction(self.file_explorer_dock.toggleViewAction())
+
 
     def _connect_manager_signals(self):
         self.file_manager.file_opened.connect(self._on_file_opened_by_manager)
@@ -188,6 +205,9 @@ class MainWindow(QMainWindow):
         self.file_manager.error_occurred.connect(self._on_file_manager_error)
         self.file_manager.dirty_status_changed.connect(self._on_dirty_status_changed_by_manager)
         self.file_manager.file_closed_in_editor.connect(self._on_file_closed_by_manager)
+        self.file_manager.item_created.connect(self._on_fm_item_created)
+        self.file_manager.item_renamed.connect(self._on_fm_item_renamed)
+        self.file_manager.item_deleted.connect(self._on_fm_item_deleted)
 
         self.process_manager.output_received.connect(self._on_process_output)
         self.process_manager.process_started.connect(self._on_process_started)
@@ -197,6 +217,14 @@ class MainWindow(QMainWindow):
         self.session_manager.session_data_loaded.connect(self._on_session_data_loaded)
         self.session_manager.session_data_saved.connect(self._on_session_data_saved)
         self.session_manager.session_error.connect(self._on_session_manager_error)
+
+        if self.file_explorer:
+            self.file_explorer.file_open_requested.connect(self._on_explorer_file_open_requested)
+            self.file_explorer.create_new_file_requested.connect(self._on_explorer_create_new_file)
+            self.file_explorer.create_new_folder_requested.connect(self._on_explorer_create_new_folder)
+            self.file_explorer.rename_item_requested.connect(self._on_explorer_rename_item)
+            self.file_explorer.delete_item_requested.connect(self._on_explorer_delete_item)
+            self.file_explorer.open_in_terminal_requested.connect(self._on_explorer_open_in_terminal)
 
     @Slot()
     def _on_new_file(self):
@@ -601,12 +629,21 @@ class MainWindow(QMainWindow):
         elif self.tab_widget.count() > 0: # Fallback
             self.tab_widget.setCurrentIndex(0)
 
-        root_path_from_session = data.get("root_path")
+        file_explorer_root = data.get("file_explorer_root")
+        if self.file_explorer and file_explorer_root and os.path.isdir(file_explorer_root):
+            self.file_explorer.set_root_path(file_explorer_root)
+            self.setWindowTitle(f"Aether Editor - {os.path.basename(file_explorer_root)}")
+        elif self.file_explorer: # Default if not in session or invalid
+            default_fe_path = QDir.homePath()
+            # If any files were opened, try to use their directory as a hint for FE root
+            if open_file_paths: default_fe_path = os.path.dirname(open_file_paths[0])
+            if not os.path.isdir(default_fe_path): default_fe_path = QDir.homePath()
+            self.file_explorer.set_root_path(default_fe_path)
+            if default_fe_path != QDir.homePath(): self.setWindowTitle(f"Aether Editor - {os.path.basename(default_fe_path)}")
+
+        terminal_start_path = file_explorer_root if file_explorer_root and os.path.isdir(file_explorer_root) else QDir.homePath()
         if hasattr(self, 'terminal_widget') and self.terminal_widget:
-            if root_path_from_session and os.path.isdir(root_path_from_session):
-                self.terminal_widget.start_shell(root_path_from_session)
-            else:
-                self.terminal_widget.start_shell(os.path.expanduser("~"))
+            self.terminal_widget.start_shell(terminal_start_path)
 
         self.status_bar.showMessage("Session loaded.", 2000)
 
@@ -641,6 +678,7 @@ class MainWindow(QMainWindow):
             "open_file_paths": list(self.editors_map.keys()),
             "active_file_path": self._get_current_file_path(),
             "window_geometry": self.saveGeometry().toBase64().data().decode(),
+            "file_explorer_root": self.file_explorer.current_root_path if self.file_explorer else QDir.homePath(),
             # TODO: Add recent projects, other settings
         }
         self.session_manager.save_session_data(session_state)
@@ -656,6 +694,119 @@ if __name__ == '__main__':
     # In a real app, stylesheet and fonts are loaded in main.py
     # from PySide6.QtCore import QByteArray # Add this import if testing restoreGeometry here
     # from PySide6.QtCore import QProcess # Add this if type hinting QProcess.ExitStatus etc.
+    # from PySide6.QtCore import QDir # Add this if testing set_root_path or open_folder
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+# New Slots for FileExplorer signals
+    @Slot(str)
+    def _on_explorer_file_open_requested(self, path: str):
+        if path in self.editors_map:
+            self.tab_widget.setCurrentWidget(self.editors_map[path])
+        else:
+            self.file_manager.open_file(path)
+
+    @Slot(str) # parent_dir_path
+    def _on_explorer_create_new_file(self, parent_dir_path: str):
+        file_name, ok = QInputDialog.getText(self, "New File", "Enter file name:", QLineEdit.Normal, "untitled.txt")
+        if ok and file_name:
+            full_path = os.path.join(parent_dir_path, file_name)
+            if not self.file_manager.create_new_file(full_path):
+                # Error already handled by FileManager's signal
+                pass
+            else:
+                # Optionally open the new file
+                # self.file_manager.open_file(full_path)
+                pass # QFileSystemModel should update FileExplorer
+
+    @Slot(str) # parent_dir_path
+    def _on_explorer_create_new_folder(self, parent_dir_path: str):
+        folder_name, ok = QInputDialog.getText(self, "New Folder", "Enter folder name:", QLineEdit.Normal, "NewFolder")
+        if ok and folder_name:
+            full_path = os.path.join(parent_dir_path, folder_name)
+            self.file_manager.create_new_folder(full_path)
+            # QFileSystemModel should update FileExplorer
+
+    @Slot(str, str) # old_path, new_name (just the name, not full new path)
+    def _on_explorer_rename_item(self, old_path: str, new_name: str):
+        parent_dir = os.path.dirname(old_path)
+        new_full_path = os.path.join(parent_dir, new_name)
+        self.file_manager.rename_item(old_path, new_full_path)
+        # QFileSystemModel should update FileExplorer. MainWindow updates tabs via _on_fm_item_renamed.
+
+    @Slot(str) # path_to_delete
+    def _on_explorer_delete_item(self, path_to_delete: str):
+        # Confirmation is already done in FileExplorer before emitting signal
+        self.file_manager.delete_item(path_to_delete)
+        # QFileSystemModel should update. MainWindow updates tabs via _on_fm_item_deleted.
+
+    @Slot(str) # directory_path
+    def _on_explorer_open_in_terminal(self, directory_path: str):
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.start_shell(directory_path)
+            if hasattr(self, 'terminal_dock') and self.terminal_dock:
+                self.terminal_dock.show()
+                self.terminal_dock.raise_()
+        else:
+            QMessageBox.information(self, "Terminal", "Terminal component not available.")
+
+# New Slots for FileManager item change signals
+    @Slot(str, bool) # path, is_directory
+    def _on_fm_item_created(self, path: str, is_directory: bool):
+        # QFileSystemModel in FileExplorer should auto-update.
+        # If not, FileExplorer might need a refresh_path(os.path.dirname(path)) call.
+        if self.file_explorer:
+            self.file_explorer.refresh_path(os.path.dirname(path)) # Tell FE to hint a refresh
+        self.status_bar.showMessage(f"Created: {os.path.basename(path)}", 3000)
+
+    @Slot(str, str) # old_path, new_path
+    def _on_fm_item_renamed(self, old_path: str, new_path: str):
+        if self.file_explorer:
+            self.file_explorer.refresh_path(os.path.dirname(old_path)) # Refresh old parent
+            self.file_explorer.refresh_path(os.path.dirname(new_path)) # Refresh new parent
+
+        # Update any open editor tab that was tracking the old_path
+        if old_path in self.editors_map:
+            editor = self.editors_map.pop(old_path)
+            self.editors_map[new_path] = editor
+            editor.set_file_path_context(new_path)
+            tab_index = self.tab_widget.indexOf(editor)
+            if tab_index != -1:
+                self.tab_widget.setTabText(tab_index, os.path.basename(new_path))
+                self.tab_widget.setTabToolTip(tab_index, new_path)
+                # Update dirty status if necessary (though rename shouldn't change content dirty state)
+                is_dirty = editor.is_modified()
+                self._on_dirty_status_changed_by_manager(new_path, is_dirty)
+            if self.tab_widget.currentWidget() == editor:
+                 self._update_status_bar_for_editor(editor)
+
+        self.status_bar.showMessage(f"Renamed: {os.path.basename(old_path)} to {os.path.basename(new_path)}", 3000)
+
+    @Slot(str) # path_deleted
+    def _on_fm_item_deleted(self, path_deleted: str):
+        if self.file_explorer:
+            self.file_explorer.refresh_path(os.path.dirname(path_deleted))
+
+        # Close any open editor tab for the deleted file
+        if path_deleted in self.editors_map:
+            editor_to_close = self.editors_map.pop(path_deleted)
+            tab_index = self.tab_widget.indexOf(editor_to_close)
+            if tab_index != -1:
+                self.tab_widget.removeTab(tab_index) # This calls currentChanged, which handles status bar etc.
+            editor_to_close.deleteLater()
+            QMessageBox.information(self, "File Deleted",
+                                    f"The open file '{os.path.basename(path_deleted)}' has been deleted.")
+
+        self.status_bar.showMessage(f"Deleted: {os.path.basename(path_deleted)}", 3000)
+
+# Slot for "Open Folder..." action
+    @Slot()
+    def _on_open_folder(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "Open Folder", QDir.homePath())
+        if folder_path and self.file_explorer:
+            self.file_explorer.set_root_path(folder_path)
+            self.setWindowTitle(f"Aether Editor - {os.path.basename(folder_path)}")
+            # Optionally, tell terminal to switch to this folder too
+            if hasattr(self, 'terminal_widget') and self.terminal_widget:
+                self.terminal_widget.start_shell(folder_path)
