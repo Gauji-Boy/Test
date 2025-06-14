@@ -1,119 +1,102 @@
 import os
-from PySide6.QtCore import QObject, Signal, Slot, QProcess, QIODevice
+from PySide6.QtCore import QObject, Signal, Slot, QProcess
 
 class ProcessManager(QObject):
     # Signals
-    output_received = Signal(str)  # Emits lines of output (stdout or stderr)
-    process_started = Signal()     # Emits when a process successfully starts
-    process_finished = Signal(int, QProcess.ExitStatus)  # exit_code, exit_status
-    process_error = Signal(str)    # Emits error messages (e.g., if process cannot start)
+    output_received = Signal(str)
+    process_started = Signal()
+    process_finished = Signal(int, QProcess.ExitStatus) # exitCode, exitStatus
+    process_error = Signal(str) # For errors like command not found, etc.
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.process = None
 
     @Slot(list, str)
-    def execute(self, command_parts, working_dir):
-        if self.is_running():
+    def execute(self, command_parts: list, working_dir: str):
+        if self.process and self.process.state() != QProcess.NotRunning:
             self.process_error.emit("A process is already running.")
+            # Optionally, queue the command or notify user. For now, just error out.
             return
 
         if not command_parts:
-            self.process_error.emit("Command cannot be empty.")
+            self.process_error.emit("No command provided to execute.")
             return
+
+        self.process = QProcess()
+        self.process.setProcessChannelMode(QProcess.MergedChannels) # Combine stdout and stderr
+
+        # Connect signals from QProcess
+        self.process.readyReadStandardOutput.connect(self._on_ready_read_standard_output)
+        self.process.started.connect(self._on_process_started)
+        # QProcess.finished is overloaded, specify arguments to connect to the correct one
+        self.process.finished.connect(self._on_process_finished)
+        self.process.errorOccurred.connect(self._on_process_error_occurred)
 
         program = command_parts[0]
         arguments = command_parts[1:]
 
-        self.process = QProcess(self)
-        self.process.setWorkingDirectory(working_dir)
-
-        # Connect signals from QProcess
-        self.process.readyReadStandardOutput.connect(self._handle_stdout)
-        self.process.readyReadStandardError.connect(self._handle_stderr)
-        self.process.finished.connect(self._handle_finished)
-        self.process.errorOccurred.connect(self._handle_error_occurred)
-        self.process.started.connect(self.process_started) # Emit signal when started
-
-        try:
-            # PySide6 recommends startCommand for simplicity if you have the full command string.
-            # However, using setProgram and then start() gives more control if needed.
-            # Let's assume `command_parts` is `[executable, arg1, arg2, ...] LFS
-            # `start` is fine for this.
-
-            # Ensure the program exists and is executable, especially on non-Windows
-            # This is a basic check; QProcess might have more robust ways.
-            if not QProcess.findExecutable(program):
-                 if os.path.isfile(program) and os.access(program, os.X_OK):
-                     # Full path to executable might be provided
-                     pass # QProcess will try to run it
-                 else:
-                    self.process_error.emit(f"Executable '{program}' not found or not executable.")
-                    self.process = None
-                    return
-
-            self.process.setProgram(program)
-            self.process.setArguments(arguments)
-
-            # Set unified channels for easier output handling if desired, or handle separately.
-            # self.process.setProcessChannelMode(QProcess.MergedChannels)
-
-            self.process.start()
-            # QProcess.start() is non-blocking.
-            # process_started signal will be emitted if it starts successfully.
-
-        except Exception as e:
-            self.process_error.emit(f"Failed to start process: {e}")
-            self.process = None # Ensure process is cleared on error
-
-    @Slot()
-    def _handle_stdout(self):
-        if not self.process:
-            return
-        data = self.process.readAllStandardOutput()
-        self.output_received.emit(data.data().decode(errors='replace'))
-
-    @Slot()
-    def _handle_stderr(self):
-        if not self.process:
-            return
-        data = self.process.readAllStandardError()
-        self.output_received.emit(data.data().decode(errors='replace')) # Emit stderr on same signal
-
-    @Slot(int, QProcess.ExitStatus)
-    def _handle_finished(self, exit_code, exit_status):
-        # print(f"ProcessManager: Process finished. Exit code: {exit_code}, Status: {exit_status}")
-        self.process_finished.emit(exit_code, exit_status)
-        # Clean up the QProcess object once it's finished and signals are handled.
-        # self.process.deleteLater() # Causes issues if we want to check is_running later or restart
-        self.process = None # Allow a new process to be started
-
-    @Slot(QProcess.ProcessError)
-    def _handle_error_occurred(self, error):
-        # This signal is emitted when the process fails to start, crashes, or times out.
-        if self.process: # Check if process exists, as it might be None if start failed early
-            error_string = self.process.errorString()
+        if working_dir and os.path.isdir(working_dir):
+            self.process.setWorkingDirectory(working_dir)
         else:
-            error_string = f"QProcess.ProcessError code: {error} (process object was None)"
+            # If working_dir is invalid, emit warning or error, or use default.
+            # For now, QProcess will use the current working directory of the main application.
+            print(f"ProcessManager: Warning - Invalid or no working directory specified: {working_dir}. Using default.")
 
-        # print(f"ProcessManager: Process error occurred: {error_string} (Error code: {error})")
-        self.process_error.emit(error_string)
-        # self.process.deleteLater() # Clean up if an error occurs that implies it won't finish normally
-        self.process = None # Allow a new process to be started
 
-    @Slot()
-    def is_running(self) -> bool:
+        print(f"ProcessManager: Executing '{program}' with arguments {arguments} in '{self.process.workingDirectory()}'")
+        self.process.start(program, arguments)
+        # Note: process.start() is non-blocking. Signals will notify of events.
+
+    def _on_ready_read_standard_output(self):
         if self.process:
-            return self.process.state() != QProcess.NotRunning
-        return False
+            output_bytes = self.process.readAllStandardOutput()
+            try:
+                # Try decoding with UTF-8, fallback to system locale or others if needed
+                output_str = output_bytes.data().decode('utf-8', errors='replace')
+            except Exception as e:
+                output_str = f"[Decode Error: {e}]\n{output_bytes.data().decode('latin-1', errors='replace')}" # Fallback
+            self.output_received.emit(output_str)
+
+    def _on_process_started(self):
+        self.process_started.emit()
+        print("ProcessManager: Process started.")
+
+    def _on_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        # Read any remaining output
+        self._on_ready_read_standard_output()
+
+        self.process_finished.emit(exit_code, exit_status)
+        status_str = "normally" if exit_status == QProcess.NormalExit else "crashed"
+        print(f"ProcessManager: Process finished {status_str} with exit code {exit_code}.")
+        self.process = None # Allow new process execution
+
+    def _on_process_error_occurred(self, error: QProcess.ProcessError):
+        error_map = {
+            QProcess.FailedToStart: "Failed to start",
+            QProcess.Crashed: "Crashed",
+            QProcess.Timedout: "Timed out",
+            QProcess.ReadError: "Read error",
+            QProcess.WriteError: "Write error",
+            QProcess.UnknownError: "Unknown error"
+        }
+        error_string = error_map.get(error, "An unspecified error occurred")
+
+        # Try to get more details from the process if available
+        if self.process:
+            native_error_details = self.process.errorString()
+            if native_error_details:
+                error_string += f": {native_error_details}"
+
+        self.process_error.emit(error_string)
+        print(f"ProcessManager: Process error - {error_string}")
+        self.process = None # Allow new process execution
 
     @Slot()
     def kill_process(self):
-        if self.is_running():
-            self.process.terminate() # Try to terminate gracefully first
-            # Optionally, wait for a bit and then kill if still running
-            if not self.process.waitForFinished(1000): # Wait 1 sec
-                self.process.kill()
-            # print("ProcessManager: Attempted to kill process.")
-        # else:
-            # print("ProcessManager: No process running to kill.")
+        if self.process and self.process.state() != QProcess.NotRunning:
+            self.process.kill()
+            print("ProcessManager: Sent kill signal to running process.")
+            # Note: _on_process_finished will be called eventually if kill is successful.
+        else:
+            print("ProcessManager: No process running to kill.")

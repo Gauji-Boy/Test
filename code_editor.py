@@ -1,672 +1,294 @@
-from PySide6.QtWidgets import QPlainTextEdit, QCompleter, QApplication, QTextEdit, QWidget, QHBoxLayout
-from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QKeyEvent, QFont, QSyntaxHighlighter, QPainter
-from PySide6.QtCore import Qt, QTimer, QStringListModel, QRect, QRegularExpression, QFileInfo, Signal, Slot, QPoint, QSize
-import json
-import os
-import sys
-from PySide6.QtCore import QThreadPool # Import QThreadPool
+from PySide6.QtWidgets import QPlainTextEdit, QWidget, QHBoxLayout, QTextEdit
+from PySide6.QtGui import QColor, QPainter, QFont, QTextFormat, QUndoStack, QAction
+from PySide6.QtCore import Qt, QRect, QSize, Signal, Slot
 
-# Import worker threads
-from worker_threads import JediCompletionWorker, PyflakesLinterWorker, WorkerSignals
-
-from python_highlighter import PythonHighlighter # Import the dedicated highlighter
-
+# Assuming python_highlighter.py exists and PythonHighlighter class is correctly defined.
+# If not, this import will fail. For the purpose of this subtask, we assume it's available.
+try:
+    from python_highlighter import PythonHighlighter
+except ImportError:
+    print("Warning: python_highlighter.py not found or PythonHighlighter class not defined.")
+    PythonHighlighter = None
 
 class LineNumberArea(QWidget):
     def __init__(self, editor):
         super().__init__(editor)
-        self.editor = editor
+        self.code_editor = editor
+        self.background_color = QColor("#2c3e50") # Example: Dark blue-grey
+        self.text_color = QColor("#bdc3c7")       # Example: Light grey
 
     def sizeHint(self):
-        # Calculate width based on the maximum line number
-        block_count = self.editor.blockCount()
-        num_digits = len(str(max(1, block_count)))
-        # Use fontMetrics().horizontalAdvance('9') * num_digits + padding
-        padding = 10 # Total padding (left+right)
-        width = self.fontMetrics().horizontalAdvance('9') * num_digits + padding
-        return QSize(width, 0)
+        return QSize(self.code_editor.line_number_area_width(), 0)
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        editor = self.editor
-
-        # Fill the background
-        bg_color_str = editor.theme_config.get("editor", {}).get("gutter_background", "#2c313a")
-        painter.fillRect(event.rect(), QColor(bg_color_str))
-
-        # Get the editor's font for drawing text
-        painter.setFont(editor.font())
-
-        # Set the pen color for text
-        line_num_fg_str = editor.theme_config.get("editor", {}).get("line_number_foreground", "#606366")
-        painter.setPen(QColor(line_num_fg_str))
-
-        # Determine the first visible block
-        first_block = editor.firstVisibleBlock()
-        current_block_number = editor.textCursor().blockNumber()
-
-        padding_right = 5 # Right padding for text
-
-        block = first_block
-        block_top_y_in_editor_viewport_prev = -1 # Initialize before loop
-
-        while block.isValid() and editor.blockBoundingGeometry(block).translated(editor.contentOffset()).top() <= event.rect().bottom() + editor.verticalScrollBar().value():
-            block_bounding_rect = editor.blockBoundingGeometry(block).translated(editor.contentOffset())
-            block_top_y_in_editor_viewport = block_bounding_rect.top() - editor.verticalScrollBar().value()
-
-            if block_top_y_in_editor_viewport + block_bounding_rect.height() < event.rect().top():
-                block = block.next()
-                continue
-
-            # Wrapped line check: Skip drawing if this block's top is same as previously drawn one
-            if int(block_top_y_in_editor_viewport) == int(block_top_y_in_editor_viewport_prev):
-                block = block.next()
-                continue
-
-            line_num = block.blockNumber() + 1
-
-            # Highlight current line
-            if block.blockNumber() == current_block_number:
-                highlight_color_str = editor.theme_config.get("editor", {}).get("current_line_gutter_background", "#3a3f4b")
-                # Ensure highlight_rect uses integer coordinates
-                highlight_rect = QRect(0, int(block_top_y_in_editor_viewport), self.width(), editor.fontMetrics().height())
-                painter.fillRect(highlight_rect, QColor(highlight_color_str))
-
-            # Draw line number
-            painter.drawText(
-                0, int(block_top_y_in_editor_viewport),
-                self.width() - padding_right, editor.fontMetrics().height(),
-                Qt.AlignRight, str(line_num)
-            )
-
-            block_top_y_in_editor_viewport_prev = block_top_y_in_editor_viewport # Update for next iteration's check
-
-            block = block.next()
-
-
-class BreakpointGutter(QWidget):
-    breakpoint_toggled = Signal(int)
-
-    def __init__(self, text_edit_widget):
-        super().__init__(text_edit_widget) # Pass parent
-        self.text_edit = text_edit_widget
-        self.breakpoints = set()
-        self.setFixedWidth(16) # Gutter width
-
-        # Connect signals
-        self.text_edit.document().blockCountChanged.connect(self.update)
-        # QPlainTextEdit.updateRequest is a signal that can be used.
-        self.text_edit.updateRequest.connect(self._on_editor_update_request)
-        # Also update when the editor's vertical scrollbar value changes, as this affects visible area
-        self.text_edit.verticalScrollBar().valueChanged.connect(self.update)
-
-
-    def _on_editor_update_request(self, rect, dy):
-        # This slot is connected to QPlainTextEdit's updateRequest.
-        # rect is the area to update in viewport coordinates.
-        # dy is the amount of vertical shift.
-        # We need to update the gutter if there's a vertical scroll or if the relevant part of the gutter needs repainting.
-        if dy != 0:
-            # If scrolled, the entire visible part of the gutter might need repaint.
-            self.update()
+        if hasattr(self.code_editor, 'line_number_area_paint_event'):
+            self.code_editor.line_number_area_paint_event(event)
         else:
-            # If no scroll, update only the corresponding part of the gutter.
-            # For simplicity, update the whole gutter. A more optimized version would translate 'rect'.
-            self.update()
+            # Fallback paint event if main editor doesn't provide one
+            painter = QPainter(self)
+            painter.fillRect(event.rect(), self.background_color)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(event.rect(), QColor("#E0E0E0")) # Gutter background
 
-        block = self.text_edit.firstVisibleBlock()
-
-        while block.isValid():
-            block_bounding_rect = self.text_edit.blockBoundingGeometry(block)
-            # Translate block's top y to viewport coordinates relative to the text_edit widget
-            block_top_y_in_editor_viewport = block_bounding_rect.translated(0, -self.text_edit.verticalScrollBar().value()).top()
-
-            # If block is below the event rect's bottom (which is in gutter's coordinates), no need to paint further.
-            # Assuming gutter and editor viewport y-coordinates are aligned.
-            if block_top_y_in_editor_viewport > event.rect().bottom():
-                break
-
-            # Only draw if the block is actually visible within the current paint event's rectangle for the gutter
-            if block_top_y_in_editor_viewport + block_bounding_rect.height() >= event.rect().top():
-                line_num = block.blockNumber() + 1
-                if line_num in self.breakpoints:
-                    block_height = block_bounding_rect.height()
-                    circle_radius = 4
-                    circle_center_x = self.width() // 2
-                    # Calculate circle_center_y relative to the gutter's coordinate system (same as editor's viewport y)
-                    circle_center_y = block_top_y_in_editor_viewport + block_height // 2
-
-                    painter.setBrush(Qt.red)
-                    painter.setPen(Qt.NoPen) # No border for the circle
-                    painter.drawEllipse(QPoint(circle_center_x, int(circle_center_y)), circle_radius, circle_radius)
-
-            block = block.next()
-            if not block.isValid():
-                break
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            click_y_in_gutter_viewport = event.position().y()
-
-            # Map this y-coordinate to a block number in the text_edit
-            # cursorForPosition expects coordinates relative to the text_edit's viewport
-            target_pos_in_editor_viewport = QPoint(5, int(click_y_in_gutter_viewport))
-            cursor = self.text_edit.cursorForPosition(target_pos_in_editor_viewport)
-
-            line_number = cursor.blockNumber() + 1
-            self.breakpoint_toggled.emit(line_number)
-
-    def update_breakpoints_display(self, new_breakpoints_set):
-        self.breakpoints = new_breakpoints_set
+    def update_theme_colors(self, background: QColor, text: QColor):
+        self.background_color = background
+        self.text_color = text
         self.update()
 
-
-class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
-    cursor_position_changed_signal = Signal(int, int) # Line, Column
-    language_changed_signal = Signal(str)
-    control_reclaim_requested = Signal() # New signal for host to reclaim control
-
-    def __init__(self, parent=None): # Parent will be the CodeEditor QWidget
-        super().__init__(parent)
-        self.setTabStopDistance(4 * self.fontMetrics().averageCharWidth())
-        self.file_path = None # file_path attribute resides here
-        self.current_language = "Plain Text"
-
-        self.theme_config = self._load_theme_config()
-        self._apply_editor_theme()
-
-        self.highlighter = PythonHighlighter(self.document(), self.theme_config)
-        self.thread_pool = QThreadPool.globalInstance()
-        self.setup_linter()
-        self.setup_completer()
-
-        self.PAIRS = {
-            '(': ')', '[': ']', '{': '}',
-            '"': '"', "'": "'", '<': '>'
-        }
-        self.CLOSING_CHARS = set(self.PAIRS.values())
-
-        # textChanged signal will be connected by the outer CodeEditor
-        self.cursorPositionChanged.connect(self._emit_cursor_position)
-        self._is_programmatic_change = False
-
-    # All original CodeEditor methods that were QPlainTextEdit specific are moved here
-    def _load_theme_config(self):
-        print("LOG: CodeEditor._load_theme_config - Entry")
-        config_path = os.path.join(os.path.dirname(__file__), 'config', 'theme.json')
-        try:
-            with open(config_path, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            sys.stderr.write(f"Theme config file not found at {config_path}. Using default theme.\n")
-            return {}
-        except json.JSONDecodeError:
-            sys.stderr.write(f"Error decoding theme config from {config_path}. Using default theme.\n")
-            return {}
-        except Exception as e:
-            sys.stderr.write(f"An unexpected error occurred loading theme config from {config_path}: {e}\n")
-            return {}
-        finally:
-            print("LOG: CodeEditor._load_theme_config - Exit")
-
-    def _apply_editor_theme(self):
-        print("LOG: CodeEditor._apply_editor_theme - Entry")
-        editor_theme = self.theme_config.get("editor", {})
-        bg_color = editor_theme.get("background", "#282c34")
-        fg_color = editor_theme.get("foreground", "#abb2bf")
-        selection_bg = editor_theme.get("selection_background", "#3e4451")
-        line_num_fg = editor_theme.get("line_number_foreground", "#5c6370")
-
-        self.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {bg_color};
-                color: {fg_color};
-                selection-background-color: {selection_bg};
-            }}
-            QPlainTextEdit QAbstractScrollArea::corner {{
-                background-color: {bg_color};
-            }}
-        """)
-        print("LOG: CodeEditor._apply_editor_theme - Exit")
-
-    def _update_language_and_highlighting(self):
-        print("LOG: CodeEditor._update_language_and_highlighting - Entry")
-        if self._is_programmatic_change:
-            print("LOG: CodeEditor._update_language_and_highlighting - Programmatic change, skipping.")
-            return
-
-        old_language = self.current_language
-        
-        if self.file_path:
-            self._is_programmatic_change = True # Set flag before programmatic change
-            self.highlighter.set_lexer_for_filename(self.file_path, self.toPlainText())
-            self._is_programmatic_change = False # Reset flag after programmatic change
-            if self.highlighter.lexer:
-                self.current_language = self.highlighter.lexer.name
-            else:
-                self.current_language = "Plain Text"
-        else:
-            self._is_programmatic_change = True # Set flag before programmatic change
-            self.highlighter.lexer = None
-            self.current_language = "Plain Text"
-            self.highlighter.rehighlight()
-            self._is_programmatic_change = False # Reset flag after programmatic change
-
-        if self.current_language != old_language:
-            self.language_changed_signal.emit(self.current_language)
-        
-        self.linter_timer.start()
-        print("LOG: CodeEditor._update_language_and_highlighting - Exit")
-
-    def set_file_path_and_update_language(self, file_path):
-        """
-        Sets the file path for the editor and triggers language detection and highlighting.
-        This method should be called when a new file is opened or saved.
-        """
-        self.file_path = file_path
-        self._update_language_and_highlighting()
-
-    def _emit_cursor_position(self):
-        print("LOG: CodeEditor._emit_cursor_position - Entry")
-        cursor = self.textCursor()
-        line = cursor.blockNumber() + 1
-        column = cursor.columnNumber() + 1
-        self.cursor_position_changed_signal.emit(line, column)
-        print("LOG: CodeEditor._emit_cursor_position - Exit")
-
-    def setup_completer(self):
-        print("LOG: CodeEditor.setup_completer - Entry")
-        self.completer = QCompleter(self)
-        self.completer.setWidget(self)
-        self.completer.setCompletionMode(QCompleter.PopupCompletion)
-        self.completer.setCaseSensitivity(Qt.CaseInsensitive)
-        self.completer.setModel(QStringListModel())
-        self.completer.activated.connect(self.insert_completion)
-
-        self.cursorPositionChanged.connect(self.show_completion_if_dot)
-        print("LOG: CodeEditor.setup_completer - Exit")
-
-    def show_completion_if_dot(self):
-        print("LOG: CodeEditor.show_completion_if_dot - Entry")
-        cursor = self.textCursor()
-        text_before_cursor = self.toPlainText()[:cursor.position()]
-        if text_before_cursor and text_before_cursor[-1] == '.':
-            self.request_completions()
-        elif self.completer.popup().isVisible():
-            self.completer.popup().hide()
-        print("LOG: CodeEditor.show_completion_if_dot - Exit")
-
-    def request_completions(self):
-        print("LOG: CodeEditor.request_completions - Entry")
-        text = self.toPlainText()
-        line = self.textCursor().blockNumber() + 1
-        column = self.textCursor().columnNumber()
-        file_path = self.file_path if self.file_path else "untitled.py"
-
-        worker = JediCompletionWorker(text, line, column, file_path)
-        worker.signals.result.connect(self._handle_completions_result)
-        worker.signals.error.connect(lambda msg: sys.stderr.write(f"Jedi error: {msg}\n"))
-        self.thread_pool.start(worker)
-        print("LOG: CodeEditor.request_completions - Exit")
-
-    @Slot(list)
-    def _handle_completions_result(self, words):
-        print("LOG: CodeEditor._handle_completions_result - Entry")
-        self.completer.model().setStringList(words)
-
-        if words:
-            cursor_rect = self.cursorRect(self.textCursor())
-            self.completer.popup().setGeometry(
-                self.mapToGlobal(cursor_rect.bottomLeft()).x(),
-                self.mapToGlobal(cursor_rect.bottomLeft()).y(),
-                self.completer.popup().sizeHint().width(),
-                self.completer.popup().sizeHint().height()
-            )
-            self.completer.complete()
-        else:
-            self.completer.popup().hide()
-        print("LOG: CodeEditor._handle_completions_result - Exit")
-
-    def insert_completion(self, completion):
-        print("LOG: CodeEditor.insert_completion - Entry")
-        if self.completer.widget() is not self:
-            print("LOG: CodeEditor.insert_completion - Completer widget mismatch, returning.")
-            return
-
-        tc = self.textCursor()
-        extra = len(self.completer.completionPrefix())
-        
-        self._is_programmatic_change = True # Set flag before programmatic change
-        tc.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor, extra)
-        tc.insertText(completion)
-        self.setTextCursor(tc)
-        self._is_programmatic_change = False # Reset flag after programmatic change
-        print("LOG: CodeEditor.insert_completion - Exit")
-
-    def setup_linter(self):
-        print("LOG: CodeEditor.setup_linter - Entry")
-        self.linter_timer = QTimer(self)
-        self.linter_timer.setInterval(700)
-        self.linter_timer.setSingleShot(True)
-        self.linter_timer.timeout.connect(self.lint_code)
-        print("LOG: CodeEditor.setup_linter - Exit")
-
-    def lint_code(self):
-        print("LOG: CodeEditor.lint_code - Entry")
-        code = self.toPlainText()
-        file_path = self.file_path if self.file_path else "untitled.py"
-        worker = PyflakesLinterWorker(code)
-        worker.signals.result.connect(self.apply_linting_highlights)
-        worker.signals.error.connect(lambda msg: sys.stderr.write(f"Pyflakes error: {msg}\n"))
-        self.thread_pool.start(worker)
-        print("LOG: CodeEditor.lint_code - Exit")
-
-    def apply_linting_highlights(self, errors):
-        print("LOG: CodeEditor.apply_linting_highlights - Entry")
-        self._is_programmatic_change = True # Set flag before programmatic change
-        extra_selections = []
-        error_format = QTextCharFormat()
-        error_format.setUnderlineStyle(QTextCharFormat.WaveUnderline)
-        error_format.setUnderlineColor(QColor("red"))
-
-        for line_num, col_num, message in errors:
-            block = self.document().findBlockByNumber(line_num - 1)
-            if block.isValid():
-                cursor = QTextCursor(block)
-                cursor.movePosition(QTextCursor.StartOfBlock)
-                cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
-
-                selection = QTextEdit.ExtraSelection()
-                selection.format = error_format
-                selection.cursor = cursor
-                extra_selections.append(selection)
-
-        self.setExtraSelections(extra_selections)
-        self._is_programmatic_change = False # Reset flag after programmatic change
-        print("LOG: CodeEditor.apply_linting_highlights - Exit")
-
-    def keyPressEvent(self, event: QKeyEvent):
-        print(f"LOG: CodeEditor.keyPressEvent - Key: {event.key()}, Text: '{event.text()}' - Entry")
-        
-        # Host-side logic to reclaim control
-        if self.isReadOnly(): # The host is currently a viewer
-            # This means the host is trying to type while a client has control.
-            # Instead of typing, emit the signal to reclaim control.
-            self.control_reclaim_requested.emit()
-            event.accept() # Consume the event so no character is typed yet.
-            return
-        
-        cursor = self.textCursor()
-        key = event.key()
-        text = event.text()
-        
-        # Get character to the right of the cursor
-        char_after_cursor = ''
-        if cursor.position() < len(self.toPlainText()):
-            char_after_cursor = self.toPlainText()[cursor.position()]
-
-        # Get character to the left of the cursor
-        char_before_cursor = ''
-        if cursor.position() > 0:
-            char_before_cursor = self.toPlainText()[cursor.position() - 1]
-
-        # 1. Handle Tab for indentation
-        if key == Qt.Key.Key_Tab:
-            self._is_programmatic_change = True
-            if cursor.hasSelection():
-                # Indent selected lines
-                start_block = cursor.blockNumber()
-                end_block = self.document().findBlock(cursor.anchor()).blockNumber()
-                if start_block > end_block:
-                    start_block, end_block = end_block, start_block
-                
-                cursor.beginEditBlock()
-                block = self.document().findBlockByNumber(start_block)
-                while block.isValid() and block.blockNumber() <= end_block:
-                    cursor_for_block = QTextCursor(block)
-                    cursor_for_block.movePosition(QTextCursor.StartOfBlock)
-                    cursor_for_block.insertText("    ") # 4 spaces for tab
-                    block = block.next()
-                cursor.endEditBlock()
-            else:
-                # Insert 4 spaces at cursor position
-                cursor.insertText("    ")
-            self._is_programmatic_change = False
-            event.accept() # Consume the event
-            print("LOG: CodeEditor.keyPressEvent - Tab handled, Exit")
-            return
-
-        # 2. Handle "Smart Over-Typing" for Closing Brackets
-        if text in self.CLOSING_CHARS and not cursor.hasSelection():
-            if char_after_cursor == text:
-                self._is_programmatic_change = True
-                cursor.movePosition(QTextCursor.NextCharacter)
-                self.setTextCursor(cursor)
-                self._is_programmatic_change = False
-                event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Over-typing handled, Exit")
-                return
-
-        # 3. Handle Context-Aware Insertion for Opening Brackets (Auto-pairing)
-        if text in self.PAIRS:
-            if cursor.hasSelection():
-                # Wrap selection
-                selected_text = cursor.selectedText()
-                self._is_programmatic_change = True
-                cursor.insertText(text + selected_text + self.PAIRS[text])
-                cursor.setPosition(cursor.position() - len(selected_text) - 1) # Move cursor back inside
-                self.setTextCursor(cursor)
-                self._is_programmatic_change = False
-                event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Auto-pair wrap handled, Exit")
-                return
-            else:
-                # Context-aware insertion
-                should_auto_pair = False
-                if not char_after_cursor or char_after_cursor.isspace() or char_after_cursor in self.CLOSING_CHARS:
-                    should_auto_pair = True
-                
-                # Special case for quotes: don't auto-pair if char before is same quote
-                if text in ['"', "'"] and char_before_cursor == text:
-                    should_auto_pair = False
-
-                if should_auto_pair:
-                    self._is_programmatic_change = True
-                    cursor.insertText(text + self.PAIRS[text])
-                    cursor.movePosition(QTextCursor.PreviousCharacter) # Move cursor back inside
-                    self.setTextCursor(cursor)
-                    self._is_programmatic_change = False
-                    event.accept() # Consume the event
-                    print("LOG: CodeEditor.keyPressEvent - Context-aware auto-pair insert handled, Exit")
-                    return
-        
-        # 4. Smart Backspace
-        if key == Qt.Key.Key_Backspace and not cursor.hasSelection():
-            if char_before_cursor in self.PAIRS and char_after_cursor == self.PAIRS[char_before_cursor]:
-                self._is_programmatic_change = True
-                cursor.beginEditBlock()
-                cursor.deletePreviousChar() # Delete opening char
-                cursor.deleteChar()         # Delete closing char
-                cursor.endEditBlock()
-                self.setTextCursor(cursor)
-                self._is_programmatic_change = False
-                event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Smart Backspace handled, Exit")
-                return
-
-        # If none of the special cases are handled, call the default handler
-        super().keyPressEvent(event)
-        print("LOG: _InternalCodeEditor.keyPressEvent - Default handler, Exit")
-
-
-class CodeEditor(QWidget): # Now inherits QWidget
-    # Define signals that will be proxied from _InternalCodeEditor
-    textChanged = Signal()
-    cursor_position_changed_signal = Signal(int, int) # This is the custom one with line/col numbers
-    language_changed_signal = Signal(str)
-    control_reclaim_requested = Signal()
-    breakpoint_toggled = Signal(int) # Signal for breakpoint toggles from the gutter
-    cursorPositionChanged = Signal() # Standard Qt signal, proxied
+class _InternalCodeEditor(QPlainTextEdit):
+    cursor_position_changed_signal = Signal(int, int)
+    modification_changed_signal = Signal(bool)
+    breakpoint_toggled_signal = Signal(int) # Line number
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.line_number_area = LineNumberArea(self)
+        self.current_language = "Plain Text"
+        self.highlighter = None
+        self.exec_highlight_line = None
+        self.exec_highlight_format = QTextFormat()
+        self.exec_highlight_format.setBackground(QColor("#f1c40f").lighter(160)) # Light yellow
+        self.exec_highlight_format.setProperty(QTextFormat.FullWidthSelection, True)
+        self.breakpoints = set()
 
-        self.text_edit = _InternalCodeEditor(self) # Create the internal editor
-        # Set font for the internal text_edit
-        font = QFont("Fira Code", 11)
-        self.text_edit.setFont(font)
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.cursorPositionChanged.connect(self._emit_cursor_position_and_highlight) # Changed connection
+        self.document().modificationChanged.connect(self.modification_changed_signal.emit)
 
-        self.line_number_area = LineNumberArea(self.text_edit) # Line numbers
-        self.gutter = BreakpointGutter(self.text_edit) # Breakpoints
+        self.update_line_number_area_width()
+        self._emit_cursor_position_and_highlight() # Initial call
 
+        # Default font - this should be set by CodeEditor wrapper or MainWindow
+        # self.setFont(QFont("Fira Code", 11)) # Commented out, to be set externally
+
+    def line_number_area_width(self):
+        digits = 1
+        max_val = max(1, self.blockCount())
+        while max_val >= 10:
+            max_val //= 10
+            digits += 1
+        # Adjust padding and calculation for better spacing
+        space = self.fontMetrics().horizontalAdvance('9') * (digits + 1) + 10 # Add margin
+        return space
+
+    def update_line_number_area_width(self):
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def update_line_number_area(self, rect, dy):
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self.update_line_number_area_width()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
+
+    def line_number_area_paint_event(self, event): # This is called by LineNumberArea's paintEvent
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), self.line_number_area.background_color)
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+
+        font_metrics_height = self.fontMetrics().height()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                painter.setPen(self.line_number_area.text_color)
+                painter.drawText(0, int(top), self.line_number_area.width() - 5,
+                                 font_metrics_height, Qt.AlignRight, number)
+                if (block_number + 1) in self.breakpoints:
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(QColor("#e74c3c")) # Red for breakpoints
+                    marker_size = 8
+                    y_pos = top + (font_metrics_height - marker_size) / 2
+                    painter.drawEllipse(QRect(4, int(y_pos), marker_size, marker_size)) # Small left margin
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            block_number += 1
+
+    def _emit_cursor_position_and_highlight(self): # Renamed and combined
+        extra_selections = []
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            # Use a less intrusive current line highlight or make it themeable
+            line_color = QColor(self.palette().alternateBase().color()).lighter(110) if self.palette().alternateBase().isValid() else QColor("#2c3e50").lighter(110)
+
+            selection.format.setBackground(line_color)
+            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extra_selections.append(selection)
+
+        if self.exec_highlight_line is not None:
+            exec_selection = QTextEdit.ExtraSelection()
+            exec_selection.format = self.exec_highlight_format
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.Start)
+            cursor.movePosition(QTextCursor.Down, QTextCursor.MoveAnchor, self.exec_highlight_line - 1)
+            exec_selection.cursor = cursor
+            exec_selection.cursor.clearSelection()
+            extra_selections.append(exec_selection)
+
+        self.setExtraSelections(extra_selections)
+
+        cursor = self.textCursor()
+        self.cursor_position_changed_signal.emit(cursor.blockNumber() + 1, cursor.columnNumber() + 1)
+
+    def set_exec_highlight(self, line_num: int | None):
+        self.exec_highlight_line = line_num
+        self._emit_cursor_position_and_highlight()
+
+    def set_language(self, language_name: str):
+        self.current_language = language_name
+        if PythonHighlighter and language_name.lower() == "python":
+            self.highlighter = PythonHighlighter(self.document())
+        else:
+            if self.highlighter:
+                self.highlighter.setDocument(None)
+            self.highlighter = None
+        # print(f"Editor language set to: {language_name if self.highlighter else 'Plain Text'}")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            margin = self.viewportMargins().left()
+            if event.pos().x() < margin:
+                # Simplified blockAt lookup
+                cursor = self.cursorForPosition(event.pos())
+                line_number = cursor.blockNumber() + 1
+                self.toggle_breakpoint(line_number)
+                return
+        super().mousePressEvent(event)
+
+    def toggle_breakpoint(self, line_number: int):
+        if line_number in self.breakpoints:
+            self.breakpoints.remove(line_number)
+        else:
+            self.breakpoints.add(line_number)
+        self.breakpoint_toggled_signal.emit(line_number)
+        self.line_number_area.update()
+
+    def update_breakpoints_display(self, new_breakpoints: set):
+        self.breakpoints = new_breakpoints
+        if self.line_number_area:
+            self.line_number_area.update()
+
+class CodeEditor(QWidget):
+    text_changed = Signal()
+    cursor_position_changed = Signal(int, int)
+    modification_changed = Signal(bool)
+    breakpoint_toggled_in_editor = Signal(str, int) # path, line_number
+    control_reclaim_requested = Signal() # For collaborative editing
+
+    def __init__(self, parent=None, file_path_context: str = None):
+        super().__init__(parent)
+        
+        self._file_path_context = file_path_context # Store path for emitting with breakpoint signal
+        self.text_edit = _InternalCodeEditor(self)
+        
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.line_number_area)
-        layout.addWidget(self.gutter)
+        layout.setContentsMargins(0,0,0,0)
         layout.addWidget(self.text_edit)
         self.setLayout(layout)
 
-        # Connect signals for LineNumberArea
-        self.text_edit.blockCountChanged.connect(self._update_line_number_area_width_and_repaint) # For width changes and repaint
-        self.text_edit.updateRequest.connect(self._on_editor_update_request_for_line_numbers)
-        self.text_edit.verticalScrollBar().valueChanged.connect(self.line_number_area.update)
-        self.text_edit.cursorPositionChanged.connect(self.line_number_area.update) # For current line highlight
+        # Forward signals from internal editor
+        self.text_edit.textChanged.connect(self.text_changed)
+        self.text_edit.cursor_position_changed_signal.connect(self.cursor_position_changed)
+        self.text_edit.modification_changed_signal.connect(self.modification_changed)
+        self.text_edit.breakpoint_toggled_signal.connect(self._on_internal_breakpoint_toggled)
 
-        # Proxy signals from internal editor to CodeEditor's signals
-        self.text_edit.textChanged.connect(self.textChanged)
-        self.text_edit.cursor_position_changed_signal.connect(self.cursor_position_changed_signal)
-        self.text_edit.language_changed_signal.connect(self.language_changed_signal)
-        self.text_edit.control_reclaim_requested.connect(self.control_reclaim_requested)
+        # Default font for editor
+        editor_font = QFont("Fira Code", 11) # Default, can be made configurable
+        self.text_edit.setFont(editor_font)
+        
+        # Update line number area theme based on editor's palette (which can be set by QSS)
+        # This is a basic example; QSS might also style LineNumberArea directly.
+        # self.text_edit.line_number_area.update_theme_colors(
+        #     self.text_edit.palette().color(self.text_edit.backgroundRole()).darker(110),
+        #     self.text_edit.palette().color(self.text_edit.foregroundRole()).darker(110)
+        # )
 
-        # Connect gutter's breakpoint_toggled signal to CodeEditor's breakpoint_toggled signal
-        self.gutter.breakpoint_toggled.connect(self.breakpoint_toggled)
 
-        # Connect the standard cursorPositionChanged signal
-        self.text_edit.cursorPositionChanged.connect(self.cursorPositionChanged)
-
-    def _update_line_number_area_width_and_repaint(self):
-        if self.line_number_area: # Check if it exists, good practice
-            self.line_number_area.updateGeometry()
-            self.line_number_area.update()
-
-    def _on_editor_update_request_for_line_numbers(self, rect, dy):
-        # This slot is connected to QPlainTextEdit's updateRequest.
-        # rect is the area to update in viewport coordinates.
-        # dy is the amount of vertical shift.
-        if dy != 0:
-            # If scrolled, the entire visible part of the gutter might need repaint.
-            # self.line_number_area.update() # This would repaint the whole thing
-            self.line_number_area.scroll(0, dy) # Scroll the existing content
+    @Slot(int)
+    def _on_internal_breakpoint_toggled(self, line_number: int):
+        if self._file_path_context: # Only emit if path context is known
+            self.breakpoint_toggled_in_editor.emit(self._file_path_context, line_number)
         else:
-            # If no scroll, update only the corresponding part of the gutter.
-            # For simplicity, update the whole gutter. A more optimized version would translate 'rect'.
-            # self.line_number_area.update()
-            # Update the part of the line number area corresponding to the editor's rect.
-            # The update call will use event.rect() in paintEvent to limit painting.
-             self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+            print("CodeEditor: Breakpoint toggled but no file_path_context set.")
 
-    def set_exec_highlight(self, line_number: int | None):
-        if not hasattr(self, 'text_edit'): # Should always exist, but good check
-            return
 
-        if line_number is None:
-            self.text_edit.setExtraSelections([])
-            return
+    def set_text(self, text: str, is_modified: bool = False):
+        # Disconnect modificationChanged temporarily to avoid signaling dirty on programmatic text set
+        try:
+            self.text_edit.modification_changed_signal.disconnect(self.modification_changed)
+        except RuntimeError: pass
+        
+        self.text_edit.setPlainText(text)
+        self.text_edit.document().setModified(is_modified) # Set modified state as passed
+        
+        self.text_edit.modification_changed_signal.connect(self.modification_changed)
 
-        # Assuming line_number is 1-based as typically provided by debuggers
-        # QPlainTextEdit/QTextDocument work with 0-based block numbers
-        target_block_number = line_number - 1
-        if target_block_number < 0:
-            self.text_edit.setExtraSelections([]) # Invalid line number, clear highlights
-            return
-
-        selection = QTextEdit.ExtraSelection()
-
-        # Define the format for the highlight
-        highlight_format = QTextCharFormat()
-        highlight_format.setBackground(QColor("#3a3d41"))
-        highlight_format.setProperty(QTextCharFormat.FullWidthSelection, True)
-
-        selection.format = highlight_format
-
-        # Set the cursor for the selection
-        # Move cursor to the beginning of the specified block number
-        block = self.text_edit.document().findBlockByNumber(target_block_number)
-        if block.isValid():
-            cursor = QTextCursor(block)
-            # No need to movePosition, cursor for block is already at start.
-            selection.cursor = cursor
-            self.text_edit.setExtraSelections([selection])
-        else:
-            # Block not valid (e.g., line number out of range), clear previous highlights
-            self.text_edit.setExtraSelections([])
-
-    # --- Proxy Methods to _InternalCodeEditor ---
-    def toPlainText(self):
+    def get_text(self) -> str:
         return self.text_edit.toPlainText()
 
-    def setPlainText(self, text):
-        self.text_edit.setPlainText(text)
+    def set_language(self, language_name: str):
+        self.text_edit.set_language(language_name)
 
-    def document(self): # MainWindow uses this for undo/redo
+    def is_modified(self) -> bool:
+        return self.text_edit.document().isModified()
+
+    def set_modified(self, modified: bool):
+        self.text_edit.document().setModified(modified)
+
+    def get_undo_stack(self) -> QUndoStack:
+        return self.text_edit.document().undoStack()
+
+    def set_read_only(self, read_only: bool):
+        self.text_edit.setReadOnly(read_only)
+
+    def set_exec_highlight(self, line_num: int | None):
+        self.text_edit.set_exec_highlight(line_num)
+
+    def update_breakpoints_display(self, new_breakpoints: set):
+        self.text_edit.update_breakpoints_display(new_breakpoints)
+
+    def set_file_path_context(self, path: str):
+        self._file_path_context = path
+        # Potentially update language based on new path's extension here
+        # lang = self._guess_language_from_path(path)
+        # if lang: self.set_language(lang)
+
+    def _guess_language_from_path(self, path:str) -> str | None:
+        # Basic language guessing, can be expanded
+        if path.endswith(".py"): return "Python"
+        if path.endswith(".js"): return "JavaScript"
+        if path.endswith(".html"): return "HTML"
+        if path.endswith(".css"): return "CSS"
+        if path.endswith(".json"): return "JSON"
+        return None
+
+
+    @Slot()
+    def undo(self):
+        self.text_edit.undo()
+
+    @Slot()
+    def redo(self):
+        self.text_edit.redo()
+
+    def ensure_cursor_visible(self):
+        self.text_edit.ensureCursorVisible()
+
+    def move_cursor(self, operation: QTextCursor.MoveOperation, mode: QTextCursor.MoveMode = QTextCursor.MoveAnchor):
+        self.text_edit.moveCursor(operation, mode)
+
+    def get_document(self): # Expose document for advanced operations if needed by MainWindow
         return self.text_edit.document()
-
-    def textCursor(self): # Might be needed if MainWindow interacts with cursor directly
-        return self.text_edit.textCursor()
-
-    def setTextCursor(self, cursor): # Might be needed
-        self.text_edit.setTextCursor(cursor)
-
-    def setReadOnly(self, readOnly):
-        self.text_edit.setReadOnly(readOnly)
-
-    def isReadOnly(self):
-        return self.text_edit.isReadOnly()
-
-    def set_file_path_and_update_language(self, file_path):
-        self.text_edit.set_file_path_and_update_language(file_path)
-
-    @property
-    def file_path(self):
-        return self.text_edit.file_path
-
-    @file_path.setter
-    def file_path(self, value):
-        self.text_edit.file_path = value
-        # The actual update of language/highlighting is handled within _InternalCodeEditor
-        # when set_file_path_and_update_language is called, or by textChanged.
-        # If direct setting of file_path should also trigger it, logic would be needed in _InternalCodeEditor's setter or here.
-
-    @property
-    def current_language(self):
-        return self.text_edit.current_language
-
-    @current_language.setter
-    def current_language(self, value):
-        self.text_edit.current_language = value
-        # Potentially trigger a language_changed_signal if this setter is used externally
-        # and needs to notify other components, though typically language changes via _update_language_and_highlighting.
-
-    # Proxy any other methods that MainWindow or other components might call on CodeEditor
-    # For example, if MainWindow used editor.clear(), you'd add:
-    # def clear(self):
-    #     self.text_edit.clear()
-
-    # Ensure keyPressEvent is handled by the focused widget (the internal text_edit)
-    # QWidget doesn't have keyPressEvent by default in the same way QPlainTextEdit does.
-    # Focus is usually handled automatically. If specific top-level key events for CodeEditor(QWidget)
-    # were needed, they'd be implemented here, but typing should go to self.text_edit.
-
-    # Placeholder for breakpoint handling if managed internally by CodeEditor later
-    # def handle_breakpoint_toggle(self, line_number):
-    #     print(f"Breakpoint toggled in CodeEditor for line: {line_number}")
-    #     if line_number in self.gutter.breakpoints:
-    #         self.gutter.breakpoints.remove(line_number)
-    #     else:
-    #         self.gutter.breakpoints.add(line_number)
-    #     self.gutter.update() # Or self.gutter.update_breakpoints_display(self.gutter.breakpoints)

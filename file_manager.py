@@ -1,107 +1,150 @@
 import os
+import black
 from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtGui import QUndoStack # For managing undo/redo if handled here
 
 class FileManager(QObject):
     # Signals
-    file_opened = Signal(str, str)  # path, content
-    file_saved = Signal(object, str, str)  # widget_ref (context for MainWindow), new_path, new_content
+    # Emitted when a file is successfully opened and its content is read.
+    # path: absolute path to the file
+    # content: content of the file
+    # is_dirty: initial dirty state (usually False for existing files, True for new)
+    file_opened = Signal(str, str, bool)
 
-    file_open_error = Signal(str, str) # path_attempted, error_message
-    file_save_error = Signal(object, str, str) # widget_ref (context for MainWindow), path_attempted, error_message
-    dirty_status_changed = Signal(str, bool) # path, is_dirty
+    # Emitted when a file is successfully saved.
+    # path: absolute path to the saved file
+    # new_content: the content that was saved (potentially formatted)
+    file_saved = Signal(str, str)
+
+    # Emitted when a file tab is intended to be closed in the UI.
+    # path: absolute path of the file being closed
+    file_closed_in_editor = Signal(str) # Renamed from file_closed for clarity
+
+    # Emitted when an error occurs during file operations.
+    # title: title for an error message box
+    # message: detailed error message
+    error_occurred = Signal(str, str)
+
+    # Emitted when the dirty status of a file changes.
+    # path: absolute path to the file
+    # is_dirty: boolean indicating the new dirty state
+    dirty_status_changed = Signal(str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Stores data about open files: {path: {"is_dirty": bool, "content_hash": int}}
+        # {path: {"content_on_disk": str, "is_dirty": bool}}
+        # "content_on_disk" is the content as it was last read or saved.
         self.open_files_data = {}
 
     @Slot(str)
-    def open_file(self, path):
-        if not path:
-            self.file_open_error.emit(path or "", "File path is empty.")
-            return
-        if not os.path.exists(path):
-            self.file_open_error.emit(path, f"File not found: {path}")
-            return
+    def open_file(self, path: str):
         if not os.path.isfile(path):
-            self.file_open_error.emit(path, f"Path is not a file: {path}")
+            self.error_occurred.emit("File Error", f"File not found or is not a file: {path}")
             return
 
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            self.open_files_data[path] = {"is_dirty": False, "content_hash": hash(content)}
-            self.file_opened.emit(path, content)
-        except Exception as e:
-            self.file_open_error.emit(path, f"Could not open file {path}: {e}")
 
-    @Slot(object, str, str) # widget_ref, content, path
-    def save_file(self, widget_ref, content, path):
-        if not path:
-            self.file_save_error.emit(widget_ref, path or "", "File path cannot be None for saving.")
-            return
+            self.open_files_data[path] = {
+                "content_on_disk": content, # Store what was read from disk
+                "is_dirty": False
+            }
+            self.file_opened.emit(path, content, False)
+            print(f"FileManager: Opened '{path}'")
+        except Exception as e:
+            self.error_occurred.emit("File Open Error", f"Could not open file '{path}':\n{e}")
+
+    @Slot(str, str, str) # current_path, new_content_from_editor, new_path_for_save_as=None
+    def save_file(self, current_path: str, content_to_save: str, new_path_for_save_as: str = None):
+        path_to_save_to = new_path_for_save_as if new_path_for_save_as else current_path
+        final_content_to_save = content_to_save
+
+        if not path_to_save_to: # Should not happen if logic is correct
+            self.error_occurred.emit("Save Error", "No file path specified for saving.")
+            return False # Indicate failure
+
+        # Apply Black formatting for Python files
+        if path_to_save_to.lower().endswith(".py"):
+            try:
+                mode = black.FileMode()
+                formatted_content = black.format_str(content_to_save, mode=mode)
+                final_content_to_save = formatted_content
+            except black.NothingChanged:
+                final_content_to_save = content_to_save
+            except black.InvalidInput as iie:
+                self.error_occurred.emit("Formatting Error", f"Syntax error in Python code. Cannot format and save '{os.path.basename(path_to_save_to)}':\n{iie}")
+                return False
+            except Exception as e:
+                print(f"Warning: Black formatting failed for '{path_to_save_to}', saving unformatted: {e}")
 
         try:
-            dir_name = os.path.dirname(path)
-            if dir_name: # Ensure directory exists only if path includes a directory
-                os.makedirs(dir_name, exist_ok=True)
+            with open(path_to_save_to, 'w', encoding='utf-8') as f:
+                f.write(final_content_to_save)
 
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(content)
+            if current_path != path_to_save_to and current_path in self.open_files_data:
+                del self.open_files_data[current_path]
 
-            initial_dirty_state = self.open_files_data.get(path, {}).get("is_dirty", False)
-            self.open_files_data[path] = {"is_dirty": False, "content_hash": hash(content)}
-            self.file_saved.emit(widget_ref, path, content)
-            if initial_dirty_state:
-                self.dirty_status_changed.emit(path, False)
+            self.open_files_data[path_to_save_to] = {
+                "content_on_disk": final_content_to_save,
+                "is_dirty": False
+            }
 
+            self.file_saved.emit(path_to_save_to, final_content_to_save)
+            self.dirty_status_changed.emit(path_to_save_to, False)
+            print(f"FileManager: Saved '{path_to_save_to}'")
+            return True
         except Exception as e:
-            self.file_save_error.emit(widget_ref, path, f"Could not save file {path}: {e}")
+            self.error_occurred.emit("File Save Error", f"Could not save file '{path_to_save_to}':\n{e}")
+            return False
 
-    @Slot(str, str) # path, current_editor_content
-    def update_file_content_changed(self, path, current_editor_content):
-        '''
-        Called by MainWindow when a tracked editor's content changes.
-        Updates the dirty status.
-        '''
+    @Slot(str)
+    def close_file_requested(self, path: str):
         if path in self.open_files_data:
-            current_hash = hash(current_editor_content)
-            saved_hash = self.open_files_data[path].get("content_hash")
+            self.file_closed_in_editor.emit(path)
+            print(f"FileManager: Close requested for '{path}', UI can proceed to remove tab.")
+        else:
+            print(f"FileManager: Warning - close_file_requested for path not in open_files_data: {path}")
+            self.file_closed_in_editor.emit(path)
 
-            is_dirty = current_hash != saved_hash
+    @Slot(str)
+    def confirm_file_close(self, path: str):
+        if path in self.open_files_data:
+            del self.open_files_data[path]
+            print(f"FileManager: Confirmed close and removed '{path}' from tracking.")
+        else:
+            print(f"FileManager: Warning - confirm_file_close for path not in open_files_data: {path}")
 
+    @Slot(str)
+    def get_file_content_on_disk(self, path: str) -> str | None:
+        return self.open_files_data.get(path, {}).get("content_on_disk")
+
+    @Slot(str, bool)
+    def update_dirty_status(self, path: str, is_dirty: bool):
+        if path in self.open_files_data:
             if self.open_files_data[path]["is_dirty"] != is_dirty:
                 self.open_files_data[path]["is_dirty"] = is_dirty
                 self.dirty_status_changed.emit(path, is_dirty)
+                print(f"FileManager: Dirty status for '{path}' changed to {is_dirty}")
+        elif is_dirty:
+            self.dirty_status_changed.emit(path, is_dirty) # For new/untitled files not yet in open_files_data
+            print(f"FileManager: Dirty status for (potentially new) '{path}' changed to {is_dirty}")
 
     @Slot(str)
-    def get_dirty_state(self, path) -> bool:
-        '''Returns the dirty state of a tracked file.'''
+    def is_file_dirty(self, path: str) -> bool:
+        # For new (untitled) files, path might not be in open_files_data yet.
+        # In this case, if MainWindow is tracking it as dirty, this method might not be called for it,
+        # or MainWindow knows it's dirty because it's new and has no on-disk content.
+        # This method is primarily for files known to FileManager.
         return self.open_files_data.get(path, {}).get("is_dirty", False)
 
-    @Slot(str) # path_of_file_being_closed
-    def file_closed_in_editor(self, path):
-        '''Called by MainWindow when a tab associated with a path is closed.'''
-        if path in self.open_files_data:
-            del self.open_files_data[path]
+    def get_open_file_paths_for_session(self) -> list:
+        """Returns a list of paths of currently open files for session saving."""
+        return list(self.open_files_data.keys())
 
-    def get_all_open_files_data(self):
-        '''Returns the raw dictionary of open files data. Used by SessionManager.'''
-        return self.open_files_data
-
-    def load_open_files_data(self, data):
-        '''Called by MainWindow during session load to restore FileManager's state.'''
-        self.open_files_data = data
-
-    @Slot(str, str)
-    def rename_path_tracking(self, old_path, new_path):
-        if old_path in self.open_files_data:
-            data = self.open_files_data.pop(old_path)
-            self.open_files_data[new_path] = data
-            # print(f"FileManager: Renamed tracking from {old_path} to {new_path}")
-            # Optionally, emit a signal if MainWindow needs to react specifically to this internal rename.
-            # For example: path_tracking_renamed = Signal(str, str) # old_path, new_path
-            # self.path_tracking_renamed.emit(old_path, new_path)
-        else:
-            # print(f"FileManager: rename_path_tracking called for non-tracked path: {old_path}")
-            pass
+    def load_open_files_from_session(self, files_to_open_paths: list):
+        for path in files_to_open_paths:
+            if os.path.exists(path):
+                self.open_file(path)
+            else:
+                self.error_occurred.emit("Session Load Warning", f"File from last session not found: {path}")

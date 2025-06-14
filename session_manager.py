@@ -1,98 +1,101 @@
-import os
 import json
-from PySide6.QtCore import QObject, Slot, QStandardPaths, Signal
+import os
+from PySide6.QtCore import QObject, Signal, Slot, QStandardPaths
 
 class SessionManager(QObject):
-    # Signal to inform about errors during session loading or saving
+    # Signals
+    # Emitted when session data is successfully loaded.
+    # data: a dictionary containing the loaded session state
+    session_data_loaded = Signal(dict)
+
+    # Emitted when session data is successfully saved.
+    session_data_saved = Signal()
+
+    # Emitted when an error occurs during session loading or saving.
+    # message: a string describing the error
     session_error = Signal(str)
-    session_loaded = Signal(dict) # Emits loaded session data
-    session_saved = Signal()      # Confirms session was saved
+
+    CONFIG_DIR_NAME = "AetherEditor" # Application-specific config directory name
+    SESSION_FILE_NAME = "session.json"
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.session_file_name = "session.json"
-        self.app_config_dir_name = ".aether_editor" # Same as in MainWindow
+        self.session_file_path = self._get_session_file_path()
 
-    def _get_session_file_path(self):
-        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        session_dir = os.path.join(config_dir, self.app_config_dir_name)
-        os.makedirs(session_dir, exist_ok=True)
-        return os.path.join(session_dir, self.session_file_name)
-
-    @Slot(dict, list, str, str)
-    def save_session(self, open_files_data, recent_projects, root_path, active_file_path: str):
-        """
-        Saves the session data to session.json.
-        open_files_data: Data from FileManager.get_all_open_files_data()
-                         It's a dict like {path: {"is_dirty": bool, "content_hash": int}}
-        recent_projects: List of recent project paths.
-        root_path: Current root path of the file explorer.
-        active_file_path: Path of the currently active file/tab.
-        """
-        session_data_to_save = {
-            "open_files_data": open_files_data, # This now stores hashes and dirty flags
-            "recent_projects": recent_projects,
-            "root_path": root_path,
-            "active_file_path": active_file_path
-        }
-
-        session_file_path = self._get_session_file_path()
+    def _get_session_file_path(self) -> str:
+        """Determines the path for the session file."""
         try:
-            with open(session_file_path, 'w', encoding='utf-8') as f:
-                json.dump(session_data_to_save, f, indent=4)
-            # print(f"SessionManager: Session saved to {session_file_path}. Content: {session_data_to_save}")
-            self.session_saved.emit()
-        except IOError as e:
-            error_msg = f"Error saving session to {session_file_path}: {e}"
-            # print(f"SessionManager: {error_msg}")
-            self.session_error.emit(error_msg)
+            app_data_path = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+            # QStandardPaths.AppConfigLocation can sometimes just be .config or AppData
+            # So, we ensure our application-specific directory exists.
+            if not app_data_path: # Fallback if somehow AppConfigLocation is empty
+                app_data_path = QStandardPaths.writableLocation(QStandardPaths.GenericConfigLocation)
+
+            # Ensure the app-specific directory is part of the path
+            # This handles cases where AppConfigLocation might be too generic (e.g., just '~/.config')
+            # or already specific (e.g., '~/.config/YourApp').
+            # We want to ensure our CONFIG_DIR_NAME is the final component for the directory.
+            base_config_path = app_data_path
+            if os.path.basename(app_data_path).lower() != self.CONFIG_DIR_NAME.lower():
+                 base_config_path = os.path.join(app_data_path, self.CONFIG_DIR_NAME)
+
+            if not os.path.exists(base_config_path):
+                os.makedirs(base_config_path, exist_ok=True)
+
+            return os.path.join(base_config_path, self.SESSION_FILE_NAME)
         except Exception as e:
-            error_msg = f"An unexpected error occurred while saving session: {e}"
-            # print(f"SessionManager: {error_msg}")
+            print(f"SessionManager: Error determining session file path: {e}")
+            # Fallback to current directory if all else fails (less ideal)
+            return os.path.join(os.getcwd(), self.SESSION_FILE_NAME)
+
+
+    @Slot(dict)
+    def save_session_data(self, data_dict: dict):
+        """Saves the provided session data to the session file."""
+        if not self.session_file_path:
+            self.session_error.emit("Session file path is not configured.")
+            return
+
+        try:
+            # Ensure directory exists one last time
+            session_dir = os.path.dirname(self.session_file_path)
+            if not os.path.exists(session_dir):
+                os.makedirs(session_dir, exist_ok=True)
+
+            with open(self.session_file_path, 'w', encoding='utf-8') as f:
+                json.dump(data_dict, f, indent=4)
+            self.session_data_saved.emit()
+            print(f"SessionManager: Session data saved to '{self.session_file_path}'")
+        except Exception as e:
+            error_msg = f"Could not save session data to '{self.session_file_path}':\n{e}"
             self.session_error.emit(error_msg)
+            print(f"SessionManager: Error - {error_msg}")
 
     @Slot()
-    def load_session(self):
-        """
-        Loads session data from session.json.
-        Returns the loaded data as a dictionary.
-        Emits session_loaded signal on success, or session_error on failure.
-        """
-        session_file_path = self._get_session_file_path()
-        default_session_data = {
-            "open_files_data": {},
-            "recent_projects": [],
-            "root_path": None,
-            "active_file_path": None # Changed from active_file_index: 0
-        }
+    def load_session_data(self) -> None:
+        """Loads session data from the session file and emits session_data_loaded."""
+        if not self.session_file_path:
+            self.session_error.emit("Session file path is not configured for loading.")
+            self.session_data_loaded.emit({}) # Emit empty dict if no path
+            return
 
-        if os.path.exists(session_file_path):
-            try:
-                with open(session_file_path, 'r', encoding='utf-8') as f:
-                    loaded_data = json.load(f)
+        if not os.path.exists(self.session_file_path):
+            print(f"SessionManager: Session file '{self.session_file_path}' not found. Starting fresh.")
+            self.session_data_loaded.emit({}) # Emit empty dict if file doesn't exist
+            return
 
-                # Ensure active_file_path is part of the loaded_data, default to None if not.
-                # If old "active_file_index" exists, it's ignored in favor of "active_file_path".
-                if "active_file_path" not in loaded_data:
-                    loaded_data["active_file_path"] = None
-
-                # print(f"SessionManager: Session loaded from {session_file_path}. Content: {loaded_data}")
-                self.session_loaded.emit(loaded_data)
-                return loaded_data
-            except json.JSONDecodeError as e:
-                error_msg = f"Error decoding session file {session_file_path}: {e}. Using default session."
-                # print(f"SessionManager: {error_msg}")
-                self.session_error.emit(error_msg)
-                self.session_loaded.emit(default_session_data) # Emit default data on error
-                return default_session_data
-            except Exception as e:
-                error_msg = f"An unexpected error occurred while loading session: {e}. Using default session."
-                # print(f"SessionManager: {error_msg}")
-                self.session_error.emit(error_msg)
-                self.session_loaded.emit(default_session_data) # Emit default data on error
-                return default_session_data
-        else:
-            # print(f"SessionManager: Session file {session_file_path} not found. Using default session.")
-            # No error signal here, it's normal for first run
-            self.session_loaded.emit(default_session_data)
-            return default_session_data
+        try:
+            with open(self.session_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.session_data_loaded.emit(data)
+            print(f"SessionManager: Session data loaded from '{self.session_file_path}'")
+        except json.JSONDecodeError as jde:
+            error_msg = f"Could not parse session data from '{self.session_file_path}' (JSONDecodeError): {jde}.\nStarting with a fresh session."
+            self.session_error.emit(error_msg)
+            print(f"SessionManager: Error - {error_msg}")
+            self.session_data_loaded.emit({}) # Emit empty on parse error
+        except Exception as e:
+            error_msg = f"Could not load session data from '{self.session_file_path}':\n{e}.\nStarting with a fresh session."
+            self.session_error.emit(error_msg)
+            print(f"SessionManager: Error - {error_msg}")
+            self.session_data_loaded.emit({}) # Emit empty on other errors
