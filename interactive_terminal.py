@@ -16,7 +16,7 @@ class InteractiveTerminal(QWidget):
         self.output_display = QPlainTextEdit(self)
         self.output_display.setReadOnly(True)
         self.output_display.setFont(QFont("Fira Code", 10)) # Default size 10, consistent with old terminal
-
+        
         # Apply some basic colors from the QSS palette if possible
         # QSS will be the primary way to style this.
         # pal = self.output_display.palette()
@@ -48,10 +48,10 @@ class InteractiveTerminal(QWidget):
             self.shell_process.kill()
             if not self.shell_process.waitForFinished(1000):
                 print("InteractiveTerminal: Existing shell did not terminate gracefully.")
-
+        
         self.shell_process = QProcess(self)
         self.shell_process.setProcessChannelMode(QProcess.MergedChannels)
-
+        
         if directory and os.path.isdir(directory):
             self.current_working_directory = directory
         self.shell_process.setWorkingDirectory(self.current_working_directory)
@@ -82,7 +82,7 @@ class InteractiveTerminal(QWidget):
                     output_str = output_bytes.data().decode('latin-1', errors='replace') # Fallback
             except AttributeError: # If .data() is not needed (older Qt?)
                  output_str = output_bytes.decode('utf-8', errors='surrogateescape')
-
+            
             self.append_output(output_str)
 
     @Slot(int, QProcess.ExitStatus)
@@ -94,10 +94,10 @@ class InteractiveTerminal(QWidget):
 
     @Slot(QProcess.ProcessError)
     def _on_shell_error(self, error):
-        error_map = {
-            QProcess.FailedToStart: "Failed to start", QProcess.Crashed: "Crashed",
-            QProcess.Timedout: "Timed out", QProcess.ReadError: "Read error",
-            QProcess.WriteError: "Write error", QProcess.UnknownError: "Unknown error"
+        error_map = { 
+            QProcess.FailedToStart: "Failed to start", QProcess.Crashed: "Crashed", 
+            QProcess.Timedout: "Timed out", QProcess.ReadError: "Read error", 
+            QProcess.WriteError: "Write error", QProcess.UnknownError: "Unknown error" 
         }
         err_str = error_map.get(error, "Unknown error")
         if self.shell_process:
@@ -153,7 +153,7 @@ class InteractiveTerminal(QWidget):
                     self.send_data_to_shell_process.emit(key_text.encode())
                 self.append_output(key_text) # Echo typed key (optional, shell might do it)
                 event.accept()
-                return
+                return 
         super().keyPressEvent(event)
 
     def stop_shell(self):

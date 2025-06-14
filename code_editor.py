@@ -114,7 +114,7 @@ class _InternalCodeEditor(QPlainTextEdit):
             top = bottom
             bottom = top + self.blockBoundingRect(block).height()
             block_number += 1
-
+            
     def _emit_cursor_position_and_highlight(self): # Renamed and combined
         extra_selections = []
         if not self.isReadOnly():
@@ -132,7 +132,7 @@ class _InternalCodeEditor(QPlainTextEdit):
             selection.cursor = self.textCursor()
             selection.cursor.clearSelection()
             extra_selections.append(selection)
-
+        
         if self.exec_highlight_line is not None:
             exec_selection = QTextEdit.ExtraSelection()
             exec_selection.format = self.exec_highlight_format
@@ -144,7 +144,7 @@ class _InternalCodeEditor(QPlainTextEdit):
             extra_selections.append(exec_selection)
 
         self.setExtraSelections(extra_selections)
-
+        
         cursor = self.textCursor()
         self.cursor_position_changed_signal.emit(cursor.blockNumber() + 1, cursor.columnNumber() + 1)
 
@@ -170,7 +170,7 @@ class _InternalCodeEditor(QPlainTextEdit):
                 cursor = self.cursorForPosition(event.pos())
                 line_number = cursor.blockNumber() + 1
                 self.toggle_breakpoint(line_number)
-                return
+                return 
         super().mousePressEvent(event)
 
     def toggle_breakpoint(self, line_number: int):
@@ -234,7 +234,7 @@ class CodeEditor(QWidget):
         # Disconnect modificationChanged temporarily to avoid signaling dirty on programmatic text set
         try:
             self.text_edit.modification_changed_signal.disconnect(self.modification_changed)
-        except RuntimeError: pass
+        except RuntimeError: pass 
         
         self.text_edit.setPlainText(text)
         self.text_edit.document().setModified(is_modified) # Set modified state as passed
@@ -253,15 +253,13 @@ class CodeEditor(QWidget):
     def set_modified(self, modified: bool):
         self.text_edit.document().setModified(modified)
 
-    def get_undo_stack(self) -> QUndoStack:
-        return self.text_edit.document().undoStack()
 
     def set_read_only(self, read_only: bool):
         self.text_edit.setReadOnly(read_only)
 
     def set_exec_highlight(self, line_num: int | None):
         self.text_edit.set_exec_highlight(line_num)
-
+        
     def update_breakpoints_display(self, new_breakpoints: set):
         self.text_edit.update_breakpoints_display(new_breakpoints)
 
@@ -270,7 +268,7 @@ class CodeEditor(QWidget):
         # Potentially update language based on new path's extension here
         # lang = self._guess_language_from_path(path)
         # if lang: self.set_language(lang)
-
+        
     def _guess_language_from_path(self, path:str) -> str | None:
         # Basic language guessing, can be expanded
         if path.endswith(".py"): return "Python"

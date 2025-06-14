@@ -10,7 +10,6 @@ class NetworkManagerRefactored(QObject):
     disconnected_from_peer = Signal()
     error_occurred = Signal(str) # General network errors
     status_message = Signal(str) # For user-facing status updates
-    output_received = Signal(str, str) # For logging network activity (category, message)
 
     # Signals for data exchange (collaborative editing)
     # For text content, cursor position, selection changes, etc.
@@ -35,16 +34,16 @@ class NetworkManagerRefactored(QObject):
         self.tcp_server = None
         self.client_socket = None # For client connecting to a host
         self.host_connections = [] # For host managing multiple clients (if supported, for now single client)
-
+        
         self.is_hosting = False
         self.is_connected_as_client = False
         self.has_editing_control = False # Relevant for collaborative sessions
-
+        
         # Buffer for receiving data (similar to DAP manager)
         self._recv_buffer = QByteArray()
         self._expected_msg_size = -1 # For message framing (e.g. if messages are prefixed with size)
 
-    # --- Server (Hosting) Methods ---
+    # --- Server (Hosting) Methods --- 
     @Slot(int) # port
     def start_hosting_session(self, port: int) -> bool:
         if self.is_hosting or self.is_connected_as_client:
@@ -55,24 +54,24 @@ class NetworkManagerRefactored(QObject):
 
         self.tcp_server = QTcpServer(self)
         self.tcp_server.newConnection.connect(self._on_new_connection)
-
+        
         if not self.tcp_server.listen(QHostAddress.Any, port):
             error_msg = f"Failed to start hosting on port {port}: {self.tcp_server.errorString()}"
             self.error_occurred.emit(error_msg)
             self.status_message.emit(f"Error: Could not listen on port {port}.")
             self.tcp_server = None
             return False
-
+        
         self.is_hosting = True
         # For collaborative editing, host usually starts with control.
         # This might be adjusted based on desired initial state or a handshake.
-        self.has_editing_control = True
+        self.has_editing_control = True 
         self.editing_control_acquired.emit() # Notify UI that this instance has control
 
         actual_port = self.tcp_server.serverPort()
         msg = f"Hosting session started on port {actual_port}. Waiting for connection..."
         self.status_message.emit(msg)
-        self.output_received.emit("network_info", msg + "\n") # Using output_received for logs
+        self.network_info_received.emit("network_info", msg + "\n") # Using output_received for logs
         return True
 
     @Slot()
@@ -87,19 +86,19 @@ class NetworkManagerRefactored(QObject):
             # For simplicity, let's reject new ones if one is active.
             next_pending_socket = self.tcp_server.nextPendingConnection()
             if next_pending_socket:
-                self.output_received.emit("network_warn", "New connection attempt while already connected. Rejecting.\n")
+                self.network_info_received.emit("network_warn", "New connection attempt while already connected. Rejecting.\n")
                 next_pending_socket.close()
                 next_pending_socket.deleteLater()
             return
 
         client_socket = self.tcp_server.nextPendingConnection()
         if client_socket:
-            self.output_received.emit("network_info", f"New client connected from: {client_socket.peerAddress().toString()}:{client_socket.peerPort()}\n")
+            self.network_info_received.emit("network_info", f"New client connected from: {client_socket.peerAddress().toString()}:{client_socket.peerPort()}\n")
             self._handle_new_client_connection(client_socket)
         else:
-            self.output_received.emit("network_warn", "Failed to accept new connection (socket is null).\n")
+            self.network_info_received.emit("network_warn", "Failed to accept new connection (socket is null).\n")
 
-    # --- Client Methods ---
+    # --- Client Methods --- 
     @Slot(str, int) # host_address, port
     def connect_to_host_session(self, host_address: str, port: int) -> bool:
         if self.is_hosting or self.is_connected_as_client:
@@ -118,7 +117,7 @@ class NetworkManagerRefactored(QObject):
         self.status_message.emit(msg)
         self.output_received.emit("network_info", msg + "\n") # Using output_received for logs
         self.client_socket.connectToHost(host_address, port)
-
+        
         return True # Indicates connection attempt has started
 
     @Slot()
@@ -126,35 +125,35 @@ class NetworkManagerRefactored(QObject):
         self.is_connected_as_client = True
         self.has_editing_control = False # Client usually starts without control
         self.editing_control_lost.emit() # Notify UI that this client instance initially doesn't have control
-
+        
         msg = f"Successfully connected to host: {self.client_socket.peerName()}:{self.client_socket.peerPort()}"
         self.status_message.emit(msg)
-        self.output_received.emit("network_info", msg + "\n")
+        self.network_info_received.emit("network_info", msg + "\n")
         self.connected_to_peer.emit()
 
     @Slot()
     def _on_client_socket_disconnected(self):
         # This is for when this instance is a client and gets disconnected from the host.
         if not self.is_connected_as_client: # Prevent multiple calls or calls when not relevant
-            return
-
+            return 
+            
         peer_name = self.client_socket.peerName() if self.client_socket else "unknown_host"
         error_msg = f"Disconnected from host {peer_name}."
-
-        self.output_received.emit("network_info", error_msg + "\n")
+        
+        self.network_info_received.emit("network_info", error_msg + "\n")
         self.status_message.emit("Disconnected from host.")
         self.error_occurred.emit(error_msg) # Notify UI of disconnection
-
+        
         self._reset_network_state() # Full cleanup
         self.disconnected_from_peer.emit()
 
-    @Slot(QAbstractSocket.SocketError)
+    @Slot(QAbstractSocket.SocketError) 
     def _on_client_socket_error(self, socket_error: QAbstractSocket.SocketError):
         # This is for when this instance is a client and its socket has an error.
         if not self.client_socket: return
 
         error_msg = f"Socket error with host: {self.client_socket.errorString()} (Code: {socket_error})"
-        self.output_received.emit("network_error", error_msg + "\n")
+        self.network_info_received.emit("network_error", error_msg + "\n")
         self.error_occurred.emit(error_msg)
         # Disconnection will likely follow, or _reset_network_state might be called by the handler of this error.
         # For now, let _on_client_socket_disconnected handle the full cleanup if error leads to disconnect.
@@ -164,7 +163,7 @@ class NetworkManagerRefactored(QObject):
         # This method is called by the host when a new client connects.
         # For now, assuming a single client connection for the host.
         if self.host_connections: # If somehow called again while one exists
-            self.output_received.emit("network_warn", "_handle_new_client_connection called with existing connections. Closing new one.\n")
+            self.network_info_received.emit("network_warn", "_handle_new_client_connection called with existing connections. Closing new one.\n")
             client_socket.close()
             client_socket.deleteLater()
             return
@@ -177,7 +176,7 @@ class NetworkManagerRefactored(QObject):
 
         self.connected_to_peer.emit() # Signal that a peer is now connected
         self.status_message.emit("Client connected. Session active.")
-
+        
         # Initial state for collaboration: host has control.
         # If client needs to know this, send an initial state message.
         # Example: self.send_data_to_peer("control_status", {"has_control": False}) # Tell client it doesn't have control
@@ -186,7 +185,7 @@ class NetworkManagerRefactored(QObject):
     def _on_socket_ready_read(self): # Connected to readyRead signal of active socket(s)
         socket = self.sender() # Get the QTcpSocket that emitted the signal
         if not socket or not isinstance(socket, QTcpSocket):
-            self.output_received.emit("network_warn", "_on_socket_ready_read from unexpected sender.\n")
+            self.network_info_received.emit("network_warn", "_on_socket_ready_read from unexpected sender.\n")
             return
 
         if socket == self.client_socket or (self.host_connections and socket == self.host_connections[0]):
@@ -194,32 +193,32 @@ class NetworkManagerRefactored(QObject):
                 data = socket.readAll()
                 if data:
                     self._recv_buffer.append(data)
-                    self._process_received_data(socket)
+                    self._process_received_data(socket) 
                 # else: socket might be closing or no more data for now
             except Exception as e:
                 self.error_occurred.emit(f"Error reading from socket: {e}")
                 self._cleanup_connection(socket, was_initiated_by_us=False)
         else:
-            self.output_received.emit("network_warn", "Data received on an unrecognized socket.\n")
+            self.network_info_received.emit("network_warn", "Data received on an unrecognized socket.\n")
 
     def _process_received_data(self, source_socket: QTcpSocket):
         # Message Framing: 4-byte Big Endian unsigned integer for size, then UTF-8 JSON message.
         while True:
-            if self._expected_msg_size == -1:
+            if self._expected_msg_size == -1: 
                 if self._recv_buffer.size() >= 4:
                     try:
                         stream = QDataStream(self._recv_buffer, QIODevice.OpenModeFlag.ReadOnly)
-                        self._expected_msg_size = stream.readUInt32()
-                        self._recv_buffer = self._recv_buffer.mid(4)
+                        self._expected_msg_size = stream.readUInt32() 
+                        self._recv_buffer = self._recv_buffer.mid(4) 
                     except Exception as e:
                         self.error_occurred.emit(f"Error reading message size: {e}. Buffer content: {self._recv_buffer.toHex().data().decode()}")
-                        self._recv_buffer.clear()
+                        self._recv_buffer.clear() 
                         self._expected_msg_size = -1
-                        self._cleanup_connection(source_socket, was_initiated_by_us=False)
+                        self._cleanup_connection(source_socket, was_initiated_by_us=False) 
                         return
                 else:
-                    break
-
+                    break 
+            
             if self._expected_msg_size > 0 and self._recv_buffer.size() >= self._expected_msg_size:
                 message_data_qba = self._recv_buffer.mid(0, self._expected_msg_size)
                 self._recv_buffer = self._recv_buffer.mid(self._expected_msg_size)
@@ -233,7 +232,7 @@ class NetworkManagerRefactored(QObject):
                     if msg_type:
                         self._handle_parsed_message(msg_type, payload, source_socket)
                     else:
-                        self.output_received.emit("network_warn", f"Received message with no type: {parsed_json}\n")
+                        self.network_info_received.emit("network_warn", f"Received message with no type: {parsed_json}\n")
                 except json.JSONDecodeError as jde:
                     self.error_occurred.emit(f"JSON decode error: {jde}. Data: {message_data_qba.data().decode(errors='replace')}")
                 except UnicodeDecodeError as ude:
@@ -241,22 +240,22 @@ class NetworkManagerRefactored(QObject):
                 except Exception as e:
                     self.error_occurred.emit(f"Error processing received message: {e}")
             else:
-                break
+                break 
 
     def _handle_parsed_message(self, message_type: str, payload: dict, source_socket: QTcpSocket = None):
-        # self.output_received.emit("network_debug", f"Handling message type '{message_type}' with payload: {payload}\n")
+        # self.network_info_received.emit("network_debug", f"Handling message type '{message_type}' with payload: {payload}\n")
 
-        if message_type == "error_notification":
+        if message_type == "error_notification": 
             self.error_occurred.emit(f"Error from peer: {payload.get('message', 'Unknown error')}")
             return
-
+        
         self.data_received_from_peer.emit(message_type, payload)
 
         if message_type == "request_control":
-            if self.is_hosting:
+            if self.is_hosting: 
                 self.control_request_received.emit()
         elif message_type == "grant_control":
-            if self.is_connected_as_client:
+            if self.is_connected_as_client: 
                 self.has_editing_control = True
                 self.editing_control_acquired.emit()
                 self.status_message.emit("Editing control granted.")
@@ -270,7 +269,7 @@ class NetworkManagerRefactored(QObject):
                 self.editing_control_lost.emit()
                 self.status_message.emit("Editing control revoked by host.")
 
-    # --- Data Sending ---
+    # --- Data Sending --- 
     @Slot(str, object) # type, payload (dict/list)
     def send_data_to_peer(self, message_type: str, payload: object):
         if not self.is_connected():
@@ -283,21 +282,21 @@ class NetworkManagerRefactored(QObject):
         }
         try:
             json_message = json.dumps(message)
-            encoded_message = json_message.encode('utf-8')
+            encoded_message = json_message.encode('utf-8') 
 
             data_to_send = QByteArray()
             stream = QDataStream(data_to_send, QIODevice.OpenModeFlag.WriteOnly)
-            stream.writeUInt32(len(encoded_message))
+            stream.writeUInt32(len(encoded_message)) 
             data_to_send.append(encoded_message)
-
+            
             if self.is_hosting:
                 if self.host_connections:
                     self._send_raw_data(data_to_send, self.host_connections[0])
                 else:
-                    self.output_received.emit("network_warn", "Host: No clients to send data to.\n")
+                    self.network_info_received.emit("network_warn", "Host: No clients to send data to.\n")
             elif self.is_connected_as_client and self.client_socket:
                 self._send_raw_data(data_to_send, self.client_socket)
-
+            
         except json.JSONEncodeError as jde:
             self.error_occurred.emit(f"JSON encode error while sending: {jde}")
         except Exception as e:
@@ -308,17 +307,17 @@ class NetworkManagerRefactored(QObject):
             written = target_socket.write(data_qbytearray)
             if written == -1:
                 self.error_occurred.emit(f"Failed to write data to socket: {target_socket.errorString()}")
-                self._cleanup_connection(target_socket, was_initiated_by_us=False)
+                self._cleanup_connection(target_socket, was_initiated_by_us=False) 
             elif written < data_qbytearray.size():
                 self.error_occurred.emit("Failed to write complete data to socket (short write).")
                 self._cleanup_connection(target_socket, was_initiated_by_us=False)
         else:
             self.error_occurred.emit("Cannot send raw data: Target socket is not valid or not connected.")
 
-    # --- Session Control & Cleanup ---
+    # --- Session Control & Cleanup --- 
     @Slot()
     def stop_current_session(self):
-        self.output_received.emit("network_info", "Stopping current network session...\n")
+        self.network_info_received.emit("network_info", "Stopping current network session...\n")
         if self.is_hosting:
             # For host, close server and all client connections
             if self.tcp_server:
@@ -330,9 +329,9 @@ class NetworkManagerRefactored(QObject):
             if self.client_socket:
                 self.client_socket.abort() # Force close
                 # self.client_socket.deleteLater() # Defer this to _reset_network_state
-
+        
         # Full cleanup of states and objects
-        self._reset_network_state()
+        self._reset_network_state() 
         self.status_message.emit("Network session stopped.")
         self.disconnected_from_peer.emit() # General signal indicating no peer connection
         if self.has_editing_control: # If this instance had control, it's now lost
@@ -345,12 +344,12 @@ class NetworkManagerRefactored(QObject):
         if not socket_to_cleanup: return
 
         peer_info_str = f"{socket_to_cleanup.peerAddress().toString()}:{socket_to_cleanup.peerPort()}"
-        self.output_received.emit("network_info", f"Cleaning up connection with {peer_info_str}. Initiated by us: {was_initiated_by_us}\n")
+        self.network_info_received.emit("network_info", f"Cleaning up connection with {peer_info_str}. Initiated by us: {was_initiated_by_us}\n")
 
         # Disconnect all signals from this specific socket
-        try: socket_to_cleanup.readyRead.disconnect(self._on_socket_ready_read)
+        try: socket_to_cleanup.readyRead.disconnect(self._on_socket_ready_read) 
         except RuntimeError: pass
-
+        
         if socket_to_cleanup in self.host_connections:
             try: socket_to_cleanup.disconnected.disconnect(self._on_host_client_socket_disconnected)
             except RuntimeError: pass
@@ -385,15 +384,15 @@ class NetworkManagerRefactored(QObject):
         # print("NetworkManager: Resetting network state.") # Debug log
         if self.client_socket:
             # Disconnect signals before closing and deleting
-            try: self.client_socket.connected.disconnect(self._on_client_socket_connected)
+            try: self.client_socket.connected.disconnect(self._on_client_socket_connected) 
             except RuntimeError: pass
-            try: self.client_socket.disconnected.disconnect(self._on_client_socket_disconnected)
+            try: self.client_socket.disconnected.disconnect(self._on_client_socket_disconnected) 
             except RuntimeError: pass
-            try: self.client_socket.errorOccurred.disconnect(self._on_client_socket_error)
+            try: self.client_socket.errorOccurred.disconnect(self._on_client_socket_error) 
             except RuntimeError: pass
-            try: self.client_socket.readyRead.disconnect(self._on_socket_ready_read)
+            try: self.client_socket.readyRead.disconnect(self._on_socket_ready_read) 
             except RuntimeError: pass
-
+            
             if self.client_socket.isOpen():
                 self.client_socket.abort() # Force close immediately
             self.client_socket.deleteLater()
@@ -406,14 +405,14 @@ class NetworkManagerRefactored(QObject):
             except RuntimeError: pass
             self.tcp_server.deleteLater()
             self.tcp_server = None
-
+        
         # Close and delete any client sockets connected to the host
         for sock in self.host_connections:
-            try: sock.readyRead.disconnect(self._on_socket_ready_read)
+            try: sock.readyRead.disconnect(self._on_socket_ready_read) 
             except RuntimeError: pass
-            try: sock.disconnected.disconnect(self._on_host_client_socket_disconnected)
+            try: sock.disconnected.disconnect(self._on_host_client_socket_disconnected) 
             except RuntimeError: pass
-            # try: sock.errorOccurred.disconnect(self._on_host_client_socket_error)
+            # try: sock.errorOccurred.disconnect(self._on_host_client_socket_error) 
             # except RuntimeError: pass
             if sock.isOpen():
                 sock.abort()
@@ -461,7 +460,7 @@ class NetworkManagerRefactored(QObject):
         if not self.is_hosting or not self.host_connections:
             self.error_occurred.emit("Cannot reclaim control: Not hosting or no client.")
             return
-
+        
         if not self.has_editing_control: # If host doesn't have it, it means client might
             self.send_data_to_peer("revoke_control", {})
             self.has_editing_control = True # Host reclaims control
@@ -471,7 +470,7 @@ class NetworkManagerRefactored(QObject):
         else:
             self.status_message.emit("Host already has editing control.")
 
-    # --- Getters/Setters for State (if needed by MainWindow) ---
+    # --- Getters/Setters for State (if needed by MainWindow) --- 
     def is_connected(self) -> bool:
         # A more precise check for active, usable connection
         if self.is_hosting:
@@ -486,45 +485,47 @@ class NetworkManagerRefactored(QObject):
             socket_to_check = self.host_connections[0]
         elif self.is_connected_as_client and self.client_socket:
             socket_to_check = self.client_socket
-
+        
         if socket_to_check and socket_to_check.state() == QTcpSocket.SocketState.ConnectedState:
             return f"{socket_to_check.peerAddress().toString()}:{socket_to_check.peerPort()}"
         return None
 
     def __del__(self):
         # print("NetworkManagerRefactored: __del__ called.") # Optional debug
-        self.stop_current_session()
+        # Avoid emitting signals or relying on Qt objects in __del__ as they might already be destroyed.
+        # Explicit cleanup should be handled by the parent object (e.g., MainWindow)
+        # self.stop_current_session()
 
-    # --- Slots for client socket signals (when this instance is the host) ---
-    @Slot()
-    def _on_host_client_socket_disconnected(self):
-        # This slot would be connected to the disconnected() signal of a client_socket
-        # stored in self.host_connections.
-        # Find which socket disconnected if managing multiple.
-        sender_socket = self.sender() # QTcpSocket that emitted the signal
-        if sender_socket in self.host_connections:
-            peer_info = f"{sender_socket.peerAddress().toString()}:{sender_socket.peerPort()}"
-            self.output_received.emit("network_info", f"Client {peer_info} disconnected.\n")
-            self._cleanup_connection(sender_socket, was_initiated_by_us=False)
-        else:
-            self.output_received.emit("network_warn", "A client socket disconnected but was not in the managed list.\n")
+        # --- Slots for client socket signals (when this instance is the host) ---
+        @Slot()
+        def _on_host_client_socket_disconnected(self):
+            # This slot would be connected to the disconnected() signal of a client_socket
+            # stored in self.host_connections.
+            # Find which socket disconnected if managing multiple.
+            sender_socket = self.sender() # QTcpSocket that emitted the signal
+            if sender_socket in self.host_connections:
+                peer_info = f"{sender_socket.peerAddress().toString()}:{sender_socket.peerPort()}"
+                self.network_info_received.emit("network_info", f"Client {peer_info} disconnected.\n")
+                self._cleanup_connection(sender_socket, was_initiated_by_us=False)
+            else:
+                self.network_info_received.emit("network_warn", "A client socket disconnected but was not in the managed list.\n")
+            
+            # If no clients left, can emit disconnected_from_peer or just update status
+            if not self.host_connections:
+                self.disconnected_from_peer.emit()
+                self.status_message.emit("Client disconnected. Waiting for new connection...")
+                # Host might retain control or reset based on policy.
+                # self.has_editing_control = True # Host typically regains/retains control
+                # self.editing_control_acquired.emit()
 
-        # If no clients left, can emit disconnected_from_peer or just update status
-        if not self.host_connections:
-            self.disconnected_from_peer.emit()
-            self.status_message.emit("Client disconnected. Waiting for new connection...")
-            # Host might retain control or reset based on policy.
-            # self.has_editing_control = True # Host typically regains/retains control
-            # self.editing_control_acquired.emit()
-
-    @Slot(QAbstractSocket.SocketError)
-    def _on_host_client_socket_error(self, socket_error: QAbstractSocket.SocketError):
-        # This slot would handle errors from a specific client socket on the host side.
-        sender_socket = self.sender()
-        if sender_socket in self.host_connections:
-            error_msg = f"Error on client socket ({sender_socket.peerAddress().toString()}): {sender_socket.errorString()} (Code: {socket_error})"
-            self.error_occurred.emit(error_msg)
-            self.output_received.emit("network_error", error_msg + "\n")
-            # self._cleanup_connection(sender_socket, was_initiated_by_us=False) # Disconnect might follow
-        else:
-            self.output_received.emit("network_warn", "Error from an unmanaged client socket.\n")
+        @Slot(QAbstractSocket.SocketError)
+        def _on_host_client_socket_error(self, socket_error: QAbstractSocket.SocketError):
+            # This slot would handle errors from a specific client socket on the host side.
+            sender_socket = self.sender()
+            if sender_socket in self.host_connections:
+                error_msg = f"Error on client socket ({sender_socket.peerAddress().toString()}): {sender_socket.errorString()} (Code: {socket_error})"
+                self.error_occurred.emit(error_msg)
+                self.network_info_received.emit("network_error", error_msg + "\n")
+                # self._cleanup_connection(sender_socket, was_initiated_by_us=False) # Disconnect might follow
+            else:
+                self.network_info_received.emit("network_warn", "Error from an unmanaged client socket.\n")
