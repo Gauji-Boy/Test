@@ -1245,10 +1245,10 @@ class MainWindow(QMainWindow):
 
 
 # Minimal main execution for testing if this file is run directly (usually done in main.py)
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+# if __name__ == '__main__':
+#     app = QApplication(sys.argv)
+#     window = MainWindow()
+#     window.show()
+#     sys.exit(app.exec())
 
 [end of main_window.py]
