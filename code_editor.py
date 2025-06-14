@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QPlainTextEdit, QWidget, QHBoxLayout, QTextEdit
-from PySide6.QtGui import QColor, QPainter, QFont, QTextFormat, QUndoStack, QAction
+from PySide6.QtGui import QColor, QPainter, QFont, QTextFormat, QUndoStack, QAction, QTextCursor
 from PySide6.QtCore import Qt, QRect, QSize, Signal, Slot
 
 # Assuming python_highlighter.py exists and PythonHighlighter class is correctly defined.

@@ -14,8 +14,14 @@ from file_manager import FileManager
 from process_manager import ProcessManager
 from session_manager import SessionManager
 
+# Import new manager classes
+from file_manager import FileManager
+from process_manager import ProcessManager
+from session_manager import SessionManager
+
 # Import refactored CodeEditor and other UI components
 from code_editor import CodeEditor
+from interactive_terminal import InteractiveTerminal # Added import
 
 class MainWindow(QMainWindow):
     EXTENSION_TO_LANGUAGE = {
@@ -106,7 +112,7 @@ class MainWindow(QMainWindow):
         self.open_file_action.setShortcut(QKeySequence.Open)
         self.open_file_action.triggered.connect(self._on_open_file)
         file_menu.addAction(self.open_file_action)
-        
+
         file_menu.addSeparator()
         self.save_file_action = QAction(QIcon.fromTheme("document-save"), "&Save", self)
         self.save_file_action.setShortcut(QKeySequence.Save)
@@ -162,7 +168,19 @@ class MainWindow(QMainWindow):
         self.menuBar().addMenu("&Help")
 
     def _setup_docks(self):
-        pass # Placeholder for future dock widgets
+        # Terminal Dock
+        self.terminal_dock = QDockWidget("Terminal", self)
+        self.terminal_dock.setObjectName("TerminalDockWidget") # For QSS if needed
+        self.terminal_widget = InteractiveTerminal(self)
+        self.terminal_dock.setWidget(self.terminal_widget)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+        # Optionally, create a view menu action to toggle this dock
+        # view_menu = self.menuBar().findChild(QMenu, "&View") # This might be how to find it if already created
+        # if view_menu:
+        #    view_menu.addAction(self.terminal_dock.toggleViewAction())
+        # elif hasattr(self, 'view_menu'): # Check if view_menu exists as an attribute
+        #    self.view_menu.addAction(self.terminal_dock.toggleViewAction())
+
 
     def _connect_manager_signals(self):
         self.file_manager.file_opened.connect(self._on_file_opened_by_manager)
@@ -508,28 +526,46 @@ class MainWindow(QMainWindow):
 
         command_parts = [part.replace("{file}", file_path) for part in command_template]
         working_dir = os.path.dirname(file_path)
+
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.clear_output()
+            if hasattr(self, 'terminal_dock') and self.terminal_dock:
+                self.terminal_dock.show()
+                self.terminal_dock.raise_()
+
         self.process_manager.execute(command_parts, working_dir)
 
     @Slot(str)
     def _on_process_output(self, output: str):
-        print(f"Process Output: {output.strip()}") # Placeholder
-        self.status_bar.showMessage("Process output...", 1000)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.append_output(output)
+        else:
+            print(f"Process Output (no terminal): {output.strip()}")
+        # self.status_bar.showMessage("Process output...", 1000) # Optional
 
     @Slot()
     def _on_process_started(self):
         self.status_bar.showMessage("Process started...", 2000)
         self.run_action.setEnabled(False)
+        if hasattr(self, 'terminal_dock') and self.terminal_dock: # Ensure terminal is visible
+            self.terminal_dock.show()
+            self.terminal_dock.raise_()
 
-    @Slot(int, QProcess.ExitStatus)
-    def _on_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
-        status = "successfully" if exit_status == QProcess.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
-        self.status_bar.showMessage(f"Process finished {status}.", 3000)
+    @Slot(int, "QProcess::ExitStatus") # Use string literal for QProcess types if QProcess not directly imported
+    def _on_process_finished(self, exit_code: int, exit_status): # exit_status type hint might need adjustment
+        status_text = "successfully" if exit_status == QProcess.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
+        msg = f"Process finished {status_text}."
+        self.status_bar.showMessage(msg, 3000)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.append_output(f"\n--- {msg} ---\n")
         self.run_action.setEnabled(True)
 
     @Slot(str)
     def _on_process_error(self, error_message: str):
         QMessageBox.critical(self, "Process Error", error_message)
         self.status_bar.showMessage(f"Process error: {error_message}", 5000)
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.append_output(f"\n--- PROCESS ERROR: {error_message} ---\n")
         self.run_action.setEnabled(True)
 
     @Slot(dict)
@@ -564,6 +600,13 @@ class MainWindow(QMainWindow):
             self.tab_widget.setCurrentWidget(self.editors_map[active_file_path_from_session])
         elif self.tab_widget.count() > 0: # Fallback
             self.tab_widget.setCurrentIndex(0)
+
+        root_path_from_session = data.get("root_path")
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            if root_path_from_session and os.path.isdir(root_path_from_session):
+                self.terminal_widget.start_shell(root_path_from_session)
+            else:
+                self.terminal_widget.start_shell(os.path.expanduser("~"))
 
         self.status_bar.showMessage("Session loaded.", 2000)
 
@@ -603,6 +646,8 @@ class MainWindow(QMainWindow):
         self.session_manager.save_session_data(session_state)
         # Ideally, ensure session save completes before app fully quits.
         # For simple JSON write, it's usually fast enough.
+        if hasattr(self, 'terminal_widget') and self.terminal_widget:
+            self.terminal_widget.stop_shell()
         event.accept()
 
 # Minimal main execution for testing if this file is run directly (usually done in main.py)
@@ -610,6 +655,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     # In a real app, stylesheet and fonts are loaded in main.py
     # from PySide6.QtCore import QByteArray # Add this import if testing restoreGeometry here
+    # from PySide6.QtCore import QProcess # Add this if type hinting QProcess.ExitStatus etc.
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
