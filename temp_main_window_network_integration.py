@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget,
     QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar,
     QMessageBox, QLineEdit, QPushButton, QStyle, QTreeWidget, QTreeWidgetItem,
-    QListWidget, QListWidgetItem, QComboBox
+    QListWidget, QListWidgetItem, QComboBox, QInputDialog
 )
 from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QFont, QKeySequence
 from PySide6.QtCore import Qt, Signal, Slot, QPoint, QStandardPaths, QSize, QByteArray, QDir, QProcess, QTimer
@@ -13,9 +13,9 @@ from PySide6.QtCore import Qt, Signal, Slot, QPoint, QStandardPaths, QSize, QByt
 from file_manager import FileManager
 from process_manager import ProcessManager
 from session_manager import SessionManager
-from debug_manager_refactored import DebugManagerRefactored # New Import
-from network_manager_refactored import NetworkManagerRefactored
-from connection_dialog import ConnectionDialog
+from debug_manager_refactored import DebugManagerRefactored
+from network_manager_refactored import NetworkManagerRefactored # Added
+# from connection_dialog import ConnectionDialog # Assuming this exists for IP/Port input
 
 # Import UI components
 from code_editor import CodeEditor
@@ -45,15 +45,18 @@ class MainWindow(QMainWindow):
         self.process_manager = ProcessManager(self)
         self.session_manager = SessionManager(self)
         self.debug_manager = DebugManagerRefactored(self)
-        self.network_manager = NetworkManagerRefactored(self)
+        self.network_manager = NetworkManagerRefactored(self) # Instantiate
 
         self.editors_map = {}
         self.untitled_counter = 0
         self.file_explorer = None
         self.active_breakpoints = {}
+
+        # Network/Collaboration state
         self.is_updating_from_network = False
-        self.is_host = False
-        self.has_control = False
+        self.is_host = False # True if this instance is hosting a session
+        # self.is_client_session = False # Redundant, can be inferred from not self.is_host and network_manager.is_connected()
+        self.has_network_control = True # Default for non-session or host. Client starts False.
 
 
         self._setup_status_bar()
@@ -107,7 +110,7 @@ class MainWindow(QMainWindow):
 
         self.request_control_button = QPushButton("Request Control")
         self.request_control_button.setObjectName("AccentButton")
-        self.request_control_button.clicked.connect(self._on_request_editing_control)
+        self.request_control_button.clicked.connect(self._on_request_control_clicked)
         self.main_toolbar.addWidget(self.request_control_button)
 
 
@@ -215,16 +218,16 @@ class MainWindow(QMainWindow):
         run_menu.addAction(self.debug_file_action)
 
         session_menu = self.menuBar().addMenu("&Session")
-        self.start_host_action = QAction("Start Hosting Session...", self)
-        self.start_host_action.triggered.connect(self._on_start_hosting)
-        session_menu.addAction(self.start_host_action)
+        self.start_hosting_action = QAction("Start Hosting Session...", self)
+        self.start_hosting_action.triggered.connect(self._on_start_hosting_session) # Updated
+        session_menu.addAction(self.start_hosting_action)
 
-        self.connect_host_action = QAction("Connect to Host...", self)
-        self.connect_host_action.triggered.connect(self._on_connect_to_host)
-        session_menu.addAction(self.connect_host_action)
+        self.connect_to_host_action = QAction("Connect to Host...", self)
+        self.connect_to_host_action.triggered.connect(self._on_connect_to_host_session) # Updated
+        session_menu.addAction(self.connect_to_host_action)
 
         self.stop_session_action = QAction("Stop Current Session", self)
-        self.stop_session_action.triggered.connect(self._on_stop_session)
+        self.stop_session_action.triggered.connect(self._on_stop_network_session) # Updated
         session_menu.addAction(self.stop_session_action)
 
         self.menuBar().addMenu("&Tools")
@@ -308,15 +311,15 @@ class MainWindow(QMainWindow):
         self.debug_manager.dap_error.connect(self._on_dap_error)
 
         # NetworkManager
-        self.network_manager.connected_to_peer.connect(self._on_peer_connected)
-        self.network_manager.disconnected_from_peer.connect(self._on_peer_disconnected)
-        self.network_manager.data_received_from_peer.connect(self._on_network_data_received)
+        self.network_manager.connected_to_peer.connect(self._on_network_peer_connected)
+        self.network_manager.disconnected_from_peer.connect(self._on_network_peer_disconnected)
+        self.network_manager.data_received_from_peer.connect(self._on_data_received_from_peer)
         self.network_manager.error_occurred.connect(self._on_network_error)
         self.network_manager.status_message.connect(self._on_network_status_message)
         self.network_manager.editing_control_acquired.connect(self._on_editing_control_acquired)
         self.network_manager.editing_control_lost.connect(self._on_editing_control_lost)
-        self.network_manager.control_request_received.connect(self._on_network_control_request_received)
-        self.network_manager.control_request_declined.connect(self._on_network_control_request_declined)
+        self.network_manager.control_request_received.connect(self._on_control_request_from_peer)
+        # self.network_manager.control_request_declined.connect(self._on_network_control_request_declined) # Assuming this was in prev step
 
 
     @Slot()
@@ -1101,18 +1104,20 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_connect_to_host(self):
-        details, ok = ConnectionDialog.get_details(self) # Assuming ConnectionDialog is available
-        if ok and details:
-            host, port_str = details.split(":")
-            try:
-                port = int(port_str)
-                if self.network_manager.connect_to_host_session(host, port):
+        # Using QInputDialog for simplicity as ConnectionDialog might not be in the current codebase
+        host_address, ok_host = QInputDialog.getText(self, "Connect to Host", "Enter host address (e.g., localhost):")
+        if ok_host and host_address:
+            port, ok_port = QInputDialog.getInt(self, "Connect to Host", "Enter port number:", 12345, 1024, 65535, 1)
+            if ok_port:
+                if self.network_manager.connect_to_host_session(host_address, port):
                     self.is_host = False
                     self.has_control = False # Client starts without control
                     self._update_network_ui_state()
                 # else: NetworkManager will emit error_occurred
-            except ValueError:
-                QMessageBox.warning(self, "Connection Error", "Invalid port number.")
+            else:
+                self.status_bar.showMessage("Connection cancelled: Port input cancelled.", 3000)
+        else:
+            self.status_bar.showMessage("Connection cancelled: Host address input cancelled.", 3000)
 
 
     @Slot()
@@ -1121,7 +1126,7 @@ class MainWindow(QMainWindow):
         # UI updates will be handled by _on_peer_disconnected and _update_network_ui_state
 
     @Slot()
-    def _on_request_editing_control(self):
+    def _on_request_control_clicked(self): # Renamed from _on_request_editing_control
         if self.network_manager.is_connected() and not self.is_host and not self.has_control:
             self.network_manager.request_editing_control()
         elif self.is_host and not self.has_control: # Host wants to reclaim control
@@ -1130,10 +1135,17 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_peer_connected(self):
+        self.is_host = self.network_manager.is_hosting # Update is_host based on NetworkManager
+        self.has_control = self.is_host # Host starts with control, client without
+        if self.is_host:
+            self.editing_control_acquired.emit() # Host has control
+        else:
+            self.editing_control_lost.emit() # Client starts without
+
         self._update_network_ui_state()
         self.status_bar.showMessage("Connected to peer.", 3000)
-        # If client, send initial text of current document if any
-        if not self.is_host:
+
+        if not self.is_host: # Client behavior
             current_editor = self._get_current_editor()
             current_path = self._get_current_file_path()
             if current_editor and current_path:
@@ -1143,36 +1155,37 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_peer_disconnected(self):
-        self.is_host = False # Reset host status
-        self.has_control = False # Reset control status
+        self.is_host = False
+        self.has_control = False # When disconnected, no one has control in a session sense
         self._update_network_ui_state()
         self.status_bar.showMessage("Disconnected from peer.", 3000)
         QMessageBox.information(self, "Network Session", "Disconnected from peer.")
 
 
     @Slot(str, object)
-    def _on_network_data_received(self, message_type: str, payload: dict):
+    def _on_data_received_from_peer(self, message_type: str, payload: dict):
         self.is_updating_from_network = True
         try:
             if message_type == "full_text_sync":
                 path = payload.get("path")
                 content = payload.get("content")
-                is_dirty = payload.get("is_dirty", False)
+                is_dirty = payload.get("is_dirty", False) # Peer's dirty state for this content
                 if path:
                     editor = self.editors_map.get(path)
-                    if not editor: # File not open, open it
+                    if not editor:
                         self._create_new_editor_tab(path, content, is_dirty)
-                        self.file_manager.open_files_data[path] = {"content_on_disk": content, "is_dirty": is_dirty} # Track it in FM too
+                        # Inform our FileManager about this new file's state from peer
+                        self.file_manager.open_files_data[path] = {"content_on_disk": content, "is_dirty": is_dirty}
+                        self.file_manager.dirty_status_changed.emit(path, is_dirty) # Ensure UI updates if needed
                     else:
-                        # Preserve cursor position if possible (simple version)
                         cursor = editor.text_edit.textCursor()
                         old_pos = cursor.position()
-                        editor.set_text(content, is_modified=is_dirty)
-                        if old_pos <= len(content):
+                        editor.set_text(content, is_modified=is_dirty) # Set text and peer's dirty state
+                        if old_pos <= len(content): # Try to restore cursor
                             cursor.setPosition(old_pos)
                             editor.text_edit.setTextCursor(cursor)
                     self.status_bar.showMessage(f"Received update for {os.path.basename(path)}", 2000)
-            # Add other message_type handlers here (e.g., incremental diffs, cursor positions)
+            # Add other message_type handlers here
         finally:
             self.is_updating_from_network = False
 
@@ -1181,7 +1194,7 @@ class MainWindow(QMainWindow):
     def _on_network_error(self, message: str):
         QMessageBox.critical(self, "Network Error", message)
         self.status_bar.showMessage(f"Network Error: {message}", 5000)
-        self._update_network_ui_state() # Update UI as connection might be lost
+        self._update_network_ui_state()
 
     @Slot(str)
     def _on_network_status_message(self, message: str):
@@ -1200,13 +1213,14 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("You no longer have editing control.", 3000)
 
     @Slot()
-    def _on_network_control_request_received(self): # Host-side
+    def _on_control_request_from_peer(self):
         if self.is_host:
             reply = QMessageBox.question(self, "Control Request",
                                          "Client is requesting editing control. Grant?",
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             self.network_manager.respond_to_control_request(reply == QMessageBox.Yes)
 
+    # This slot was missing from the previous NetworkManager signal connections
     @Slot()
     def _on_network_control_request_declined(self): # Client-side
         QMessageBox.information(self, "Control Request", "Host declined your request for editing control.")
@@ -1216,20 +1230,20 @@ class MainWindow(QMainWindow):
     def _update_network_ui_state(self):
         connected = self.network_manager.is_connected()
 
-        self.start_host_action.setEnabled(not connected)
-        self.connect_host_action.setEnabled(not connected)
+        self.start_hosting_action.setEnabled(not connected)
+        self.connect_to_host_action.setEnabled(not connected)
         self.stop_session_action.setEnabled(connected)
 
         if connected:
             if self.is_host:
                 self.request_control_button.setText("Reclaim Control")
-                self.request_control_button.setEnabled(not self.has_control) # Can reclaim if client has control
+                self.request_control_button.setEnabled(not self.has_control)
                 self.control_status_label.setText(f"Hosting. You {'have' if self.has_control else 'gave away'} control.")
-            else: # Client
+            else:
                 self.request_control_button.setText("Request Control")
-                self.request_control_button.setEnabled(not self.has_control) # Can request if client doesn't have control
+                self.request_control_button.setEnabled(not self.has_control)
                 self.control_status_label.setText(f"Client. You {'have' if self.has_control else 'do not have'} control.")
-        else: # Not connected
+        else:
             self.request_control_button.setText("Request Control")
             self.request_control_button.setEnabled(False)
             self.control_status_label.setText("Not in session")
@@ -1239,9 +1253,8 @@ class MainWindow(QMainWindow):
             is_read_only = connected and not self.has_control
             editor.set_read_only(is_read_only)
 
-        # Update debugger toolbar based on debug state (this might be better in _update_debug_ui_state)
-        # For now, just ensuring network state doesn't wrongly enable/disable them.
-        # self.debugger_toolbar.setVisible(self.debug_manager.is_session_active()) # Example
+        # Debugger UI state should be independent of network state mostly
+        # self.debugger_toolbar.setVisible(self.debug_manager.is_session_active) # Example
 
 
 # Minimal main execution for testing if this file is run directly (usually done in main.py)
@@ -1250,5 +1263,3 @@ if __name__ == '__main__':
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
-
-[end of main_window.py]

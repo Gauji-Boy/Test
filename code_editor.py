@@ -120,7 +120,12 @@ class _InternalCodeEditor(QPlainTextEdit):
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             # Use a less intrusive current line highlight or make it themeable
-            line_color = QColor(self.palette().alternateBase().color()).lighter(110) if self.palette().alternateBase().isValid() else QColor("#2c3e50").lighter(110)
+            current_alternate_base_brush = self.palette().alternateBase()
+            if current_alternate_base_brush.style() != Qt.BrushStyle.NoBrush and current_alternate_base_brush.color().isValid():
+                line_color = QColor(current_alternate_base_brush.color()).lighter(110)
+            else:
+                # Fallback color if alternateBase is not set or its color is invalid
+                line_color = QColor("#2c3e50").lighter(110) # Default dark theme highlight
 
             selection.format.setBackground(line_color)
             selection.format.setProperty(QTextFormat.FullWidthSelection, True)

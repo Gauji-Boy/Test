@@ -183,29 +183,202 @@ class NetworkManagerRefactored(QObject):
 
     @Slot()
     def _on_socket_ready_read(self): # Connected to readyRead signal of active socket(s)
-        pass
+        socket = self.sender() # Get the QTcpSocket that emitted the signal
+        if not socket or not isinstance(socket, QTcpSocket):
+            self.output_received.emit("network_warn", "_on_socket_ready_read from unexpected sender.\n")
+            return
 
-    def _process_received_data(self, socket_wrapper_or_direct_socket):
-        pass # Parses framed messages from _recv_buffer
+        if socket == self.client_socket or (self.host_connections and socket == self.host_connections[0]):
+            try:
+                data = socket.readAll()
+                if data:
+                    self._recv_buffer.append(data)
+                    self._process_received_data(socket)
+                # else: socket might be closing or no more data for now
+            except Exception as e:
+                self.error_occurred.emit(f"Error reading from socket: {e}")
+                self._cleanup_connection(socket, was_initiated_by_us=False)
+        else:
+            self.output_received.emit("network_warn", "Data received on an unrecognized socket.\n")
 
-    def _handle_parsed_message(self, message_type: str, payload: dict, source_socket_info=None):
-        pass # Acts on a fully received and parsed message
+    def _process_received_data(self, source_socket: QTcpSocket):
+        # Message Framing: 4-byte Big Endian unsigned integer for size, then UTF-8 JSON message.
+        while True:
+            if self._expected_msg_size == -1:
+                if self._recv_buffer.size() >= 4:
+                    try:
+                        stream = QDataStream(self._recv_buffer, QIODevice.OpenModeFlag.ReadOnly)
+                        self._expected_msg_size = stream.readUInt32()
+                        self._recv_buffer = self._recv_buffer.mid(4)
+                    except Exception as e:
+                        self.error_occurred.emit(f"Error reading message size: {e}. Buffer content: {self._recv_buffer.toHex().data().decode()}")
+                        self._recv_buffer.clear()
+                        self._expected_msg_size = -1
+                        self._cleanup_connection(source_socket, was_initiated_by_us=False)
+                        return
+                else:
+                    break
+
+            if self._expected_msg_size > 0 and self._recv_buffer.size() >= self._expected_msg_size:
+                message_data_qba = self._recv_buffer.mid(0, self._expected_msg_size)
+                self._recv_buffer = self._recv_buffer.mid(self._expected_msg_size)
+                self._expected_msg_size = -1 # Reset for next message
+
+                try:
+                    message_str = message_data_qba.data().decode('utf-8')
+                    parsed_json = json.loads(message_str)
+                    msg_type = parsed_json.get("type")
+                    payload = parsed_json.get("payload")
+                    if msg_type:
+                        self._handle_parsed_message(msg_type, payload, source_socket)
+                    else:
+                        self.output_received.emit("network_warn", f"Received message with no type: {parsed_json}\n")
+                except json.JSONDecodeError as jde:
+                    self.error_occurred.emit(f"JSON decode error: {jde}. Data: {message_data_qba.data().decode(errors='replace')}")
+                except UnicodeDecodeError as ude:
+                    self.error_occurred.emit(f"UTF-8 decode error: {ude}. Data (hex): {message_data_qba.toHex().data().decode()}")
+                except Exception as e:
+                    self.error_occurred.emit(f"Error processing received message: {e}")
+            else:
+                break
+
+    def _handle_parsed_message(self, message_type: str, payload: dict, source_socket: QTcpSocket = None):
+        # self.output_received.emit("network_debug", f"Handling message type '{message_type}' with payload: {payload}\n")
+
+        if message_type == "error_notification":
+            self.error_occurred.emit(f"Error from peer: {payload.get('message', 'Unknown error')}")
+            return
+
+        self.data_received_from_peer.emit(message_type, payload)
+
+        if message_type == "request_control":
+            if self.is_hosting:
+                self.control_request_received.emit()
+        elif message_type == "grant_control":
+            if self.is_connected_as_client:
+                self.has_editing_control = True
+                self.editing_control_acquired.emit()
+                self.status_message.emit("Editing control granted.")
+        elif message_type == "decline_control":
+            if self.is_connected_as_client:
+                self.control_request_declined.emit()
+                self.status_message.emit("Host declined control request.")
+        elif message_type == "revoke_control":
+            if self.is_connected_as_client:
+                self.has_editing_control = False
+                self.editing_control_lost.emit()
+                self.status_message.emit("Editing control revoked by host.")
 
     # --- Data Sending ---
     @Slot(str, object) # type, payload (dict/list)
     def send_data_to_peer(self, message_type: str, payload: object):
-        pass # Serializes (e.g. to JSON) and sends data to connected peer(s)
+        if not self.is_connected():
+            self.error_occurred.emit("Cannot send data: Not connected to any peer.")
+            return
 
-    def _send_raw_data(self, data: QByteArray, target_socket: QTcpSocket = None):
-        pass # Helper to send framed QByteArray to a specific socket or all
+        message = {
+            "type": message_type,
+            "payload": payload
+        }
+        try:
+            json_message = json.dumps(message)
+            encoded_message = json_message.encode('utf-8')
+
+            data_to_send = QByteArray()
+            stream = QDataStream(data_to_send, QIODevice.OpenModeFlag.WriteOnly)
+            stream.writeUInt32(len(encoded_message))
+            data_to_send.append(encoded_message)
+
+            if self.is_hosting:
+                if self.host_connections:
+                    self._send_raw_data(data_to_send, self.host_connections[0])
+                else:
+                    self.output_received.emit("network_warn", "Host: No clients to send data to.\n")
+            elif self.is_connected_as_client and self.client_socket:
+                self._send_raw_data(data_to_send, self.client_socket)
+
+        except json.JSONEncodeError as jde:
+            self.error_occurred.emit(f"JSON encode error while sending: {jde}")
+        except Exception as e:
+            self.error_occurred.emit(f"Error preparing data to send: {e}")
+
+    def _send_raw_data(self, data_qbytearray: QByteArray, target_socket: QTcpSocket):
+        if target_socket and target_socket.isOpen() and target_socket.state() == QTcpSocket.SocketState.ConnectedState:
+            written = target_socket.write(data_qbytearray)
+            if written == -1:
+                self.error_occurred.emit(f"Failed to write data to socket: {target_socket.errorString()}")
+                self._cleanup_connection(target_socket, was_initiated_by_us=False)
+            elif written < data_qbytearray.size():
+                self.error_occurred.emit("Failed to write complete data to socket (short write).")
+                self._cleanup_connection(target_socket, was_initiated_by_us=False)
+        else:
+            self.error_occurred.emit("Cannot send raw data: Target socket is not valid or not connected.")
 
     # --- Session Control & Cleanup ---
     @Slot()
     def stop_current_session(self):
-        pass # Stops hosting or disconnects from host
+        self.output_received.emit("network_info", "Stopping current network session...\n")
+        if self.is_hosting:
+            # For host, close server and all client connections
+            if self.tcp_server:
+                self.tcp_server.close()
+                # self.tcp_server.deleteLater() # Defer this to _reset_network_state
+            # _reset_network_state will handle host_connections cleanup
+        elif self.is_connected_as_client:
+            # For client, just close its own socket
+            if self.client_socket:
+                self.client_socket.abort() # Force close
+                # self.client_socket.deleteLater() # Defer this to _reset_network_state
 
-    def _cleanup_connection(self, socket_wrapper_or_socket, was_initiated_by_us=True):
-        pass # Closes a specific socket and cleans up related resources
+        # Full cleanup of states and objects
+        self._reset_network_state()
+        self.status_message.emit("Network session stopped.")
+        self.disconnected_from_peer.emit() # General signal indicating no peer connection
+        if self.has_editing_control: # If this instance had control, it's now lost
+            self.has_editing_control = False
+            self.editing_control_lost.emit()
+
+    def _cleanup_connection(self, socket_to_cleanup: QTcpSocket, was_initiated_by_us: bool = True):
+        # This method is primarily for host-side cleanup of a specific client socket
+        # or for client-side cleanup of its own socket if called directly (though _reset_network_state is more common for client).
+        if not socket_to_cleanup: return
+
+        peer_info_str = f"{socket_to_cleanup.peerAddress().toString()}:{socket_to_cleanup.peerPort()}"
+        self.output_received.emit("network_info", f"Cleaning up connection with {peer_info_str}. Initiated by us: {was_initiated_by_us}\n")
+
+        # Disconnect all signals from this specific socket
+        try: socket_to_cleanup.readyRead.disconnect(self._on_socket_ready_read)
+        except RuntimeError: pass
+
+        if socket_to_cleanup in self.host_connections:
+            try: socket_to_cleanup.disconnected.disconnect(self._on_host_client_socket_disconnected)
+            except RuntimeError: pass
+            # try: socket_to_cleanup.errorOccurred.disconnect(self._on_host_client_socket_error)
+            # except RuntimeError: pass # Assuming this was connected
+            self.host_connections.remove(socket_to_cleanup)
+        elif socket_to_cleanup == self.client_socket:
+            try: socket_to_cleanup.connected.disconnect(self._on_client_socket_connected)
+            except RuntimeError: pass
+            try: socket_to_cleanup.disconnected.disconnect(self._on_client_socket_disconnected)
+            except RuntimeError: pass
+            try: socket_to_cleanup.errorOccurred.disconnect(self._on_client_socket_error)
+            except RuntimeError: pass
+            self.client_socket = None # Clear our reference if it's the main client socket
+            self.is_connected_as_client = False
+
+        if socket_to_cleanup.isOpen():
+            socket_to_cleanup.abort() # Force close
+        socket_to_cleanup.deleteLater() # Schedule for deletion
+
+        # If we were host and no clients left, or if we were client and disconnected
+        if (self.is_hosting and not self.host_connections) or \
+           (not self.is_hosting and not self.is_connected_as_client and socket_to_cleanup == self.client_socket):
+            # self.disconnected_from_peer.emit() # This might be emitted by the calling context already
+            # self.status_message.emit("Peer disconnected.")
+            if self.has_editing_control and not self.is_hosting: # Client lost control due to disconnect
+                self.has_editing_control = False
+                self.editing_control_lost.emit()
+            # If host, host usually retains control. If client, loses it.
 
     def _reset_network_state(self):
         # print("NetworkManager: Resetting network state.") # Debug log
@@ -257,24 +430,68 @@ class NetworkManagerRefactored(QObject):
     # --- Collaborative Editing Control Management (Example Methods) ---
     @Slot()
     def request_editing_control(self): # Client calls this
-        pass
+        if self.is_connected_as_client and not self.has_editing_control:
+            self.send_data_to_peer("request_control", {})
+            self.status_message.emit("Requesting editing control from host...")
+        elif not self.is_connected_as_client:
+            self.error_occurred.emit("Cannot request control: Not connected as client.")
+        elif self.has_editing_control:
+            self.status_message.emit("Already have editing control.")
 
     @Slot(bool) # grant (True to grant, False to decline)
     def respond_to_control_request(self, grant: bool): # Host calls this
-        pass
+        if not self.is_hosting or not self.host_connections:
+            self.error_occurred.emit("Cannot respond to control request: Not hosting or no client.")
+            return
+
+        if grant:
+            self.send_data_to_peer("grant_control", {})
+            self.has_editing_control = False # Host gives up control
+            self.editing_control_lost.emit()
+            self.control_granted_to_peer.emit() # Internal signal for host UI if needed
+            self.status_message.emit("Editing control granted to client.")
+        else:
+            self.send_data_to_peer("decline_control", {})
+            self.control_request_declined.emit() # Internal signal for host UI
+            self.status_message.emit("Editing control request declined.")
 
     @Slot()
     def reclaim_editing_control(self): # Host calls this if it previously granted control
-        pass
+        if not self.is_hosting or not self.host_connections:
+            self.error_occurred.emit("Cannot reclaim control: Not hosting or no client.")
+            return
+
+        if not self.has_editing_control: # If host doesn't have it, it means client might
+            self.send_data_to_peer("revoke_control", {})
+            self.has_editing_control = True # Host reclaims control
+            self.editing_control_acquired.emit()
+            self.control_revoked_from_peer.emit() # Internal signal for host UI
+            self.status_message.emit("Editing control reclaimed by host.")
+        else:
+            self.status_message.emit("Host already has editing control.")
 
     # --- Getters/Setters for State (if needed by MainWindow) ---
     def is_connected(self) -> bool:
-        return self.is_hosting or self.is_connected_as_client
+        # A more precise check for active, usable connection
+        if self.is_hosting:
+            return bool(self.host_connections and self.host_connections[0].state() == QTcpSocket.SocketState.ConnectedState)
+        elif self.is_connected_as_client:
+            return bool(self.client_socket and self.client_socket.state() == QTcpSocket.SocketState.ConnectedState)
+        return False
 
     def current_peer_info(self) -> str | None:
-        pass # Returns info about connected peer if any
+        socket_to_check = None
+        if self.is_hosting and self.host_connections:
+            socket_to_check = self.host_connections[0]
+        elif self.is_connected_as_client and self.client_socket:
+            socket_to_check = self.client_socket
+
+        if socket_to_check and socket_to_check.state() == QTcpSocket.SocketState.ConnectedState:
+            return f"{socket_to_check.peerAddress().toString()}:{socket_to_check.peerPort()}"
+        return None
 
     def __del__(self):
+        # print("NetworkManagerRefactored: __del__ called.") # Optional debug
         self.stop_current_session()
 
     # --- Slots for client socket signals (when this instance is the host) ---
@@ -299,8 +516,8 @@ class NetworkManagerRefactored(QObject):
             # self.has_editing_control = True # Host typically regains/retains control
             # self.editing_control_acquired.emit()
 
-    # @Slot("QTcpSocket::SocketError") # Or the actual enum QAbstractSocket.SocketError
-    def _on_host_client_socket_error(self, socket_error):
+    @Slot(QAbstractSocket.SocketError)
+    def _on_host_client_socket_error(self, socket_error: QAbstractSocket.SocketError):
         # This slot would handle errors from a specific client socket on the host side.
         sender_socket = self.sender()
         if sender_socket in self.host_connections:
