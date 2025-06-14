@@ -516,6 +516,10 @@ class CodeEditor(QWidget): # Now inherits QWidget
         super().__init__(parent)
 
         self.text_edit = _InternalCodeEditor(self) # Create the internal editor
+        # Set font for the internal text_edit
+        font = QFont("Fira Code", 11)
+        self.text_edit.setFont(font)
+
         self.line_number_area = LineNumberArea(self.text_edit) # Line numbers
         self.gutter = BreakpointGutter(self.text_edit) # Breakpoints
 

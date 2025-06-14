@@ -1,120 +1,603 @@
-/* General Window and Background */
-QMainWindow, QDialog {
-    background-color: #2c2f33; /* Dark grey background */
-    color: #ffffff; /* Default text color */
-    font-family: "Segoe UI", sans-serif;
-    font-size: 10pt;
+/* styling.qss */
+QWidget {
+    background-color: #0F172A; /* --editor-bg */
+    color: #CBD5E1; /* --text-primary */
+    font-family: "Inter"; /* Default UI Font */
+    font-size: 14px;
 }
 
-/* Labels */
-QLabel {
-    color: #ffffff;
+/* Main Window and Docks */
+QMainWindow {
+    background-color: #1E293B; /* --sidebar-bg */
 }
 
-/* Specific styling for the Task Title */
-QLabel#taskTitle {
-    font-size: 14pt;
-    font-weight: bold;
-    color: #ffffff;
-    margin-bottom: 5px;
+QDockWidget {
+    /* titlebar-close-icon: none; */ /* Commenting out for now, can be revisited */
+    /* titlebar-normal-button: none; */ /* Commenting out for now, can be revisited */
+    /* border: none; */ /* Removing this to allow default dock borders/separators if needed */
 }
 
-/* Specific styling for Task Stats */
-QLabel.taskStat {
-    font-size: 9pt;
-    color: #bbbbbb;
+QDockWidget::title {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #CBD5E1; /* --text-primary, ensuring title text is visible */
+    text-align: left;
+    padding: 8px; /* Increased padding for better visual */
+    border-bottom: 1px solid #0F172A; /* --editor-bg, to provide separation */
 }
 
-/* Specific styling for Task Description */
-QLabel#taskDescription {
-    font-size: 10pt;
-    color: #cccccc;
+/* Styling for the tab bar in QDockWidgets when they are tabbed */
+QDockWidget QTabBar::tab {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #94A3B8; /* --text-secondary */
+    padding: 8px 15px;
+    border-right: 1px solid #0F172A; /* --editor-bg */
+    border-bottom: none; /* Remove bottom border for tabs in docks */
 }
 
-/* Frames */
-QFrame {
-    background-color: #36393f; /* Slightly lighter dark grey for frames */
-    border: 1px solid #4f545c; /* Subtle border */
-    border-radius: 5px;
-    padding: 10px;
+QDockWidget QTabBar::tab:selected {
+    background-color: #0F172A; /* --editor-bg, same as main editor area */
+    color: #38BDF8; /* --accent-color */
+    border-right: 1px solid #0F172A;
 }
 
-/* TextEdit for user input */
-QTextEdit {
-    background-color: #40444b; /* Darker background for input */
-    border: 1px solid #5c6370; /* Light grey border */
-    border-radius: 5px;
-    color: #ffffff;
-    padding: 8px;
+QDockWidget QTabBar::tab:hover {
+    background-color: #334155; /* A slightly lighter shade for hover */
+    color: #CBD5E1; /* --text-primary */
 }
 
-QTextEdit::placeholder {
-    color: #888888; /* Placeholder text color */
+/* Remove the pane border for QTabWidget specifically within QDockWidget,
+   if QTabWidget is used to group multiple docks. */
+QDockWidget QTabWidget::pane {
+    border: none;
+}
+
+/* General ToolBar styling */
+QToolBar {
+    background-color: #1E293B; /* --sidebar-bg */
+    border: none; /* Remove default toolbar border */
+    padding: 2px; /* Minimal padding */
+    spacing: 4px; /* Spacing between toolbar items */
+}
+
+QToolBar QToolButton {
+    background-color: transparent;
+    color: #CBD5E1; /* --text-primary */
+    padding: 6px;
+    border-radius: 4px;
+    /* Add margin if needed, e.g., margin: 2px; */
+}
+
+QToolBar QToolButton:hover {
+    background-color: #334155; /* --border-color or a hover shade */
+}
+
+QToolBar QToolButton:pressed {
+    background-color: #475569; /* Darker hover shade */
+}
+
+QToolBar QToolButton:checked { /* For toggle buttons */
+    background-color: #0F172A; /* --editor-bg, to indicate active state */
+    border: 1px solid #38BDF8; /* --accent-color */
+}
+
+QToolBar::separator {
+    background-color: #334155; /* --border-color */
+    width: 1px;
+    height: 1px; /* Make it thin */
+    margin: 4px 4px; /* Vertical and horizontal margins */
+}
+
+/* Styling for QMainWindow's menu bar */
+QMenuBar {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #CBD5E1; /* --text-primary */
+    border-bottom: 1px solid #0F172A; /* --editor-bg, separator line */
+}
+
+QMenuBar::item {
+    background-color: transparent;
+    padding: 6px 10px;
+}
+
+QMenuBar::item:selected { /* When hovered or open */
+    background-color: #334155; /* --border-color or a hover shade */
+}
+
+QMenuBar::item:pressed {
+    background-color: #0F172A; /* --editor-bg */
+}
+
+/* Styling for QMenu (dropdown menus) */
+QMenu {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #CBD5E1; /* --text-primary */
+    border: 1px solid #334155; /* --border-color */
+    padding: 5px; /* Padding around the menu content */
+}
+
+QMenu::item {
+    padding: 6px 20px 6px 20px; /* Top, Right, Bottom, Left padding */
+    min-width: 150px; /* Ensure items have a decent width */
+}
+
+QMenu::item:selected {
+    background-color: #334155; /* --border-color or a hover shade */
+}
+
+QMenu::item:disabled {
+    color: #64748B; /* --text-muted */
+    background-color: transparent;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #334155; /* --border-color */
+    margin-top: 4px;
+    margin-bottom: 4px;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
+QMenu::indicator { /* For checkable menu items */
+    width: 13px;
+    height: 13px;
+    padding-left: 5px; /* Space from text */
+}
+
+/* Example for checkable item (if using Material Symbols font for checkmark)
+QMenu::indicator:checked {
+    font-family: "Material Symbols Outlined";
+    content: "\e86c"; // Example: 'check' icon codepoint
+    color: #38BDF8; // --accent-color
+}
+*/
+
+/* Status Bar Styling */
+QStatusBar {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #94A3B8; /* --text-secondary */
+    border-top: 1px solid #0F172A; /* --editor-bg */
+}
+
+QStatusBar::item {
+    border: none; /* Remove default borders for items */
+}
+
+QStatusBar QLabel { /* Target QLabel widgets specifically within QStatusBar */
+    color: #94A3B8; /* --text-secondary */
+    padding: 0px 8px; /* Padding for individual labels */
+    background-color: transparent; /* Ensure labels don't have different background */
 }
 
 /* Buttons */
 QPushButton {
-    background-color: #5865f2; /* Discord-like blue */
-    color: #ffffff;
-    border: none;
-    border-radius: 5px;
-    padding: 8px 15px;
-    font-weight: bold;
+    background-color: #334155; /* --border-color (used as a general button bg) */
+    color: #CBD5E1; /* --text-primary */
+    border: 1px solid #4F545C; /* --border-color (actual border) */
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: "Inter"; /* Ensure font is consistent */
+    font-size: 14px; /* Ensure font size is consistent */
 }
 
 QPushButton:hover {
-    background-color: #4752c4; /* Darker blue on hover */
+    background-color: #475569; /* A bit lighter than #334155 */
+    border-color: #5C6370; /* Slightly lighter border on hover */
 }
 
 QPushButton:pressed {
-    background-color: #3c45a5; /* Even darker blue when pressed */
+    background-color: #2C3E50; /* Darker shade for pressed state */
+    border-color: #3E4C59;
 }
 
 QPushButton:disabled {
-    background-color: #4f545c;
-    color: #bbbbbb;
+    background-color: #2C3A47; /* Darker, desaturated background */
+    color: #64748B; /* --text-muted */
+    border-color: #334155; /* --border-color */
 }
 
-/* Checkbox */
-QCheckBox {
-    color: #ffffff;
-    spacing: 5px;
+/* Special Accent Button Styling */
+QPushButton#AccentButton {
+    background-color: #0EA5E9; /* --accent-hover (original HTML accent-hover, used as base for accent button) */
+    color: #FFFFFF; /* White text for better contrast on accent color */
+    border: 1px solid #0D94D1; /* Slightly darker border for accent button */
 }
 
-QCheckBox::indicator {
+QPushButton#AccentButton:hover {
+    background-color: #38BDF8; /* --accent-color (original HTML accent-color, used as hover for accent button) */
+    border-color: #25A8E0;
+}
+
+QPushButton#AccentButton:pressed {
+    background-color: #0C82C0; /* Darker shade for pressed accent button */
+    border-color: #0B70A8;
+}
+
+QPushButton#AccentButton:disabled {
+    background-color: #4F545C; /* Similar to general disabled, but could be unique */
+    color: #94A3B8; /* --text-secondary */
+    border-color: #404854;
+}
+
+/* Styling for ToolButtons within a ComboBox (like the language selector) */
+QComboBox QToolButton {
+    background-color: #334155; /* Match general button bg */
+    border: 1px solid #4F545C; /* Match general button border */
+    border-left: none; /* Remove left border to merge with combobox */
+    border-top-right-radius: 6px; /* Round top-right corner */
+    border-bottom-right-radius: 6px; /* Round bottom-right corner */
+    padding: 8px; /* Adjust padding to align height with QComboBox */
+    /* icon-size: 16px; */ /* If using an icon */
+}
+
+QComboBox QToolButton:hover {
+    background-color: #475569;
+    border-color: #5C6370;
+}
+
+QComboBox QToolButton:pressed {
+    background-color: #2C3E50;
+}
+
+/* Styling for the ComboBox itself */
+QComboBox {
+    background-color: #334155; /* Match button background */
+    color: #CBD5E1; /* --text-primary */
+    border: 1px solid #4F545C; /* Match button border */
+    border-radius: 6px;
+    padding: 1px 0px 1px 8px; /* Adjust padding: top, right, bottom, left. Right padding is handled by dropdown arrow. */
+    min-height: 30px; /* Ensure consistent height with buttons, (padding + font) */
+    font-family: "Inter";
+    font-size: 14px;
+}
+
+QComboBox:hover {
+    background-color: #475569;
+    border-color: #5C6370;
+}
+
+QComboBox:focus {
+    border-color: #38BDF8; /* --accent-color, to indicate focus */
+}
+
+QComboBox::drop-down { /* The button part of the combobox */
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px; /* Width of the dropdown button area */
+    border-left-width: 1px;
+    border-left-color: #4F545C; /* Separator line */
+    border-left-style: solid;
+    border-top-right-radius: 6px; /* Round top-right corner */
+    border-bottom-right-radius: 6px; /* Round bottom-right corner */
+    /* image: url(path/to/your/dropdown-arrow.png); */ /* Or use icon font later */
+}
+
+/* QComboBox QAbstractItemView for the dropdown list */
+QComboBox QAbstractItemView {
+    background-color: #1E293B; /* --sidebar-bg, same as menus */
+    color: #CBD5E1; /* --text-primary */
+    border: 1px solid #334155; /* --border-color */
+    selection-background-color: #334155; /* --border-color or a hover shade */
+    selection-color: #FFFFFF;
+    padding: 4px;
+    outline: 0px; /* Remove focus outline from dropdown view */
+}
+
+QComboBox QAbstractItemView::item {
+    padding: 6px 10px;
+    min-height: 20px; /* Ensure items are not too cramped */
+}
+
+/* File Explorer */
+QTreeView {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #CBD5E1; /* --text-primary */
+    border: none; /* No border around the tree view itself */
+    padding: 4px; /* Padding around the content */
+    font-family: "Inter";
+    font-size: 14px;
+    alternate-background-color: #23272A; /* Slightly different for alternate rows, optional */
+}
+
+QTreeView::item {
+    padding: 6px 5px; /* Vertical and horizontal padding for each item */
+    border-radius: 4px; /* Rounded corners for items */
+    /* min-height: 20px; */ /* Ensure items are not too cramped, adjust as needed */
+}
+
+QTreeView::item:hover {
+    background-color: #334155; /* --border-color (used as hover background) */
+}
+
+QTreeView::item:selected {
+    background-color: #475569; /* Slightly lighter than hover, or a distinct selection color */
+    color: #FFFFFF; /* Ensure text is readable on selection */
+}
+
+QTreeView::item:selected:active { /* When the treeview has focus */
+    background-color: #0EA5E9; /* --accent-hover (accent color for active selection) */
+    color: #FFFFFF;
+}
+
+QTreeView::item:selected:!active { /* When the treeview does not have focus */
+    background-color: #4F545C; /* A more subdued selection color */
+    color: #CBD5E1;
+}
+
+/* Branch indicators (arrows for expanding/collapsing folders) */
+/* Assuming Material Symbols will be used later for icons.
+   These are placeholders and might need adjustment based on actual icon font usage.
+   For now, we'll try to style the default ones or hide them if custom icons are planned.
+*/
+QTreeView::branch {
+    background-color: transparent; /* Ensure no background behind arrows */
+    /* image: none; */ /* Uncomment this if you intend to fully replace arrows with custom icons in item delegates */
+}
+
+QTreeView::branch:has-children:!has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {
+    /* image: url(path/to/your/closed-arrow.png); */ /* Or use icon font */
+    /* For default styling: */
+    border-image: none; /* Reset any default border-image */
+    /* If you want to use a simple character (ensure font supports it well):
+    qproperty-text: ">"; */
+}
+
+QTreeView::branch:open:has-children:!has-siblings,
+QTreeView::branch:open:has-children:has-siblings {
+    /* image: url(path/to/your/open-arrow.png); */ /* Or use icon font */
+    /* For default styling: */
+    border-image: none;
+    /* qproperty-text: "v"; */
+}
+
+/* Optional: Style the header of the QTreeView if it's visible */
+QHeaderView::section {
+    background-color: #1E293B; /* --sidebar-bg */
+    color: #94A3B8; /* --text-secondary */
+    padding: 4px;
+    border: 1px solid #0F172A; /* --editor-bg, for separation */
+    font-family: "Inter";
+    font-size: 13px; /* Slightly smaller for header */
+    font-weight: bold;
+}
+
+QHeaderView::section:horizontal {
+    border-top: none;
+    border-left: none;
+    border-right: 1px solid #0F172A;
+}
+QHeaderView::section:horizontal:last {
+    border-right: none;
+}
+
+QHeaderView::section:vertical {
+    border-top: none;
+    border-left: none;
+    border-bottom: 1px solid #0F172A;
+}
+QHeaderView::section:vertical:last {
+    border-bottom: none;
+}
+
+/* ScrollBars */
+QScrollBar:vertical {
+    background: #1E293B; /* --sidebar-bg */
+    width: 10px; /* Width of the scrollbar */
+    margin: 0px 0px 0px 0px;
+    border: none;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #4F545C; /* A draggable part color */
+    min-height: 20px; /* Minimum height of the handle */
+    border-radius: 5px;
+    border: none;
+}
+QScrollBar::handle:vertical:hover {
+    background: #64748B; /* --text-muted, lighter on hover */
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none; /* No background for arrow buttons */
+    height: 0px; /* Hide arrow buttons by making them zero height */
+    subcontrol-position: top;
+    subcontrol-origin: margin;
+}
+QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+    border: none; /* Hide arrows */
+    width: 0px;
+    height: 0px;
+    background: none;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none; /* Track part */
+}
+
+QScrollBar:horizontal {
+    background: #1E293B; /* --sidebar-bg */
+    height: 10px; /* Height of the scrollbar */
+    margin: 0px 0px 0px 0px;
+    border: none;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal {
+    background: #4F545C;
+    min-width: 20px; /* Minimum width of the handle */
+    border-radius: 5px;
+    border: none;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #64748B; /* --text-muted */
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    background: none;
+    width: 0px; /* Hide arrow buttons */
+    subcontrol-position: left;
+    subcontrol-origin: margin;
+}
+QScrollBar::left-arrow:horizontal, QScrollBar::right-arrow:horizontal {
+    border: none; /* Hide arrows */
+    width: 0px;
+    height: 0px;
+    background: none;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+/* Editor Tabs */
+QTabWidget::pane {
+    border: none; /* Remove border around the tab content area */
+    /* The content area background will be QMainWindow's central widget,
+       which should be the editor background if QTabWidget is the central widget.
+       If QTabWidget is not central, its direct parent might need styling or
+       the QTabWidget::pane itself might need a background-color.
+       Given the QWidget default is --editor-bg, this should be fine. */
+}
+
+QTabWidget::tab-bar {
+    alignment: left; /* Align tabs to the left */
+    /* background-color: #1E293B; */ /* Background for the tab bar area itself, if needed. Usually transparent. */
+}
+
+QTabBar::tab {
+    background-color: #1E293B; /* --sidebar-bg, for inactive tabs */
+    color: #94A3B8; /* --text-secondary */
+    font-family: "Inter";
+    font-size: 14px;
+    padding: 8px 15px 8px 15px; /* Top, Right, Bottom, Left */
+    border-top-left-radius: 6px; /* Rounded top corners */
+    border-top-right-radius: 6px;
+    border-bottom: none; /* No bottom border for the tab itself */
+    margin-right: 1px; /* Small separation between tabs */
+    min-width: 100px; /* Minimum width for a tab */
+    /* border-right: 1px solid #0F172A; */ /* Using margin-right instead for separation */
+}
+
+QTabBar::tab:selected {
+    background-color: #0F172A; /* --editor-bg, for the active tab, making it blend with editor pane */
+    color: #38BDF8; /* --accent-color */
+    /* border-bottom: 2px solid #38BDF8; */ /* Optional: Accent underline for selected tab */
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #334155; /* --border-color (as hover for inactive tabs) */
+    color: #CBD5E1; /* --text-primary */
+}
+
+QTabBar::tab:selected:hover {
+    background-color: #1A243D; /* Slightly lighter version of --editor-bg for hover on selected tab */
+    color: #5DC8F8; /* Slightly lighter accent color */
+}
+
+QTabBar::tab:last {
+    margin-right: 0; /* No margin for the last tab */
+    /* border-right: none; */ /* No right border for the last tab if using border for separation */
+}
+
+QTabBar::tab:!selected {
+    margin-top: 2px; /* Slightly lower inactive tabs */
+}
+
+/* Close button on tabs */
+QTabBar::close-button {
+    /* Assuming use of Material Symbols font later.
+       For now, it might show a default or no icon. */
+    /* image: url(path/to/your/close-icon.png); */
+    background-color: transparent;
+    border-radius: 3px;
+    padding: 2px;
+    /* qproperty-icon: none; */ /* If you want to hide it completely for now */
+    /* Or try to use a text character if an icon font isn't ready:
+       Ideally, this is set programmatically with an icon from an icon font.
+       Using text 'X' here is a fallback and might not look great.
+       A better approach is to set an actual QIcon in Python.
+    */
+    /* For a text-based 'X' (ensure font has a good 'X'):
+    color: #94A3B8;
+    text-align: center;
+    font-weight: bold;
+    qproperty-text: "X";
     width: 16px;
     height: 16px;
-    border: 1px solid #5c6370;
+    */
+}
+
+QTabBar::close-button:hover {
+    background-color: #475569; /* Hover background for close button */
+    /* color: #FFFFFF; */ /* If using text 'X' */
+}
+
+QTabBar::close-button:pressed {
+    background-color: #64748B;
+}
+
+/* Style for the QToolButton used for scrolling tabs if there are too many */
+QTabBar QToolButton {
+    background-color: #1E293B; /* --sidebar-bg */
+    border: 1px solid #334155; /* --border-color */
     border-radius: 3px;
-    background-color: #40444b;
+    padding: 4px;
+    /* Use icons for these arrows */
 }
 
-QCheckBox::indicator:checked {
-    background-color: #5865f2;
-    border: 1px solid #5865f2;
-    image: url(./icons/check.png); /* Placeholder for a checkmark icon */
+QTabBar QToolButton:hover {
+    background-color: #334155;
 }
 
-/* QToolButton (for bottom action bar icons) */
-QToolButton {
-    background-color: transparent;
-    border: none;
-    color: #bbbbbb;
-    padding: 5px;
+/* Placeholder for icons in tab scroll buttons (left/right arrows)
+   These typically need to be set programmatically or via specific properties.
+QTabBar::scroller {
+    width: 20px; // or whatever width the buttons are
+}
+QTabBar QToolButton#qt_tabwidget_scroller_left {
+    // icon using Material Symbols font
+}
+QTabBar QToolButton#qt_tabwidget_scroller_right {
+    // icon using Material Symbols font
+}
+*/
+
+/* Line edit for renaming tabs, if applicable (though not standard for QTabBar) */
+QLineEdit { /* General QLineEdit styling, can be made more specific if needed */
+    background-color: #0F172A; /* --editor-bg */
+    color: #CBD5E1; /* --text-primary */
+    border: 1px solid #334155; /* --border-color */
+    border-radius: 4px;
+    padding: 6px;
+    font-family: "Inter";
+    font-size: 14px;
 }
 
-QToolButton:hover {
-    background-color: #4f545c;
-    border-radius: 3px;
+QLineEdit:focus {
+    border: 1px solid #38BDF8; /* --accent-color */
 }
 
-QToolButton:pressed {
-    background-color: #36393f;
+QLineEdit[readOnly="true"] {
+    background-color: #1E293B; /* --sidebar-bg if it should look less editable */
+    color: #94A3B8; /* --text-secondary */
 }
 
-/* Specific styling for status labels in the bottom bar */
-QLabel.statusBarLabel {
-    color: #bbbbbb;
-    font-size: 9pt;
-    padding: 0 5px;
+/* Splitter Handles */
+QSplitter::handle {
+    background-color: #0F172A; /* --editor-bg, same as the main editor background */
+    /* No image needed for a simple line handle */
+}
+
+QSplitter::handle:horizontal {
+    width: 1px; /* Very thin line for horizontal splitters */
+    margin: 0px 2px; /* Optional: small margin to make it easier to grab */
+}
+
+QSplitter::handle:vertical {
+    height: 1px; /* Very thin line for vertical splitters */
+    margin: 2px 0px; /* Optional: small margin */
+}
+
+QSplitter::handle:hover {
+    background-color: #38BDF8; /* --accent-color, highlight on hover */
+}
+
+QSplitter::handle:pressed {
+    background-color: #0EA5E9; /* --accent-hover, slightly different for pressed state */
 }

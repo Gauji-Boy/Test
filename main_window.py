@@ -1,4 +1,7 @@
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit, QStyle, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QActionGroup, QFont
 from PySide6.QtCore import Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject, QProcess
 from file_explorer import FileExplorer
@@ -17,6 +20,26 @@ import sys
 import shutil # For rmtree
 import json # Import json for structured messages
 import black # Import black for synchronous formatting
+
+class HtmlInterfaceHandler(QObject):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window # To access main window methods if needed
+
+    @Slot(str)
+    def showMessage(self, message):
+        print(f"Message from HTML: {message}")
+        QMessageBox.information(self.main_window, "Message from Web", message)
+
+    # Add more @Slot methods here for other interactions later
+    @Slot()
+    def triggerAiAssistant(self):
+        print("HTML Interface: AI Assistant triggered")
+        # Call the existing method in MainWindow, ensure it's not commented out
+        if hasattr(self.main_window, 'open_new_ai_assistant'):
+             self.main_window.open_new_ai_assistant()
+        else:
+            print("Error: open_new_ai_assistant method not found in MainWindow")
 
 class MainWindow(QMainWindow):
     def __init__(self, initial_path=None):
@@ -94,7 +117,9 @@ class MainWindow(QMainWindow):
 
         # Session loading logic revised:
         self.pending_initial_path = initial_path # Store for _handle_session_loaded
-        self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded
+        # self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded # Commented out for web view
+        if self.session_manager: # Check if session_manager is initialized
+            self.session_manager.load_session()
 
         self.active_breakpoints = {} # Stores path -> set of line numbers
 
@@ -141,8 +166,7 @@ class MainWindow(QMainWindow):
         """
         if path is None:
             # This is a client-only startup.
-            # Open a single, empty "Untitled" tab.
-            self.open_new_tab() # Use open_new_tab which handles None path for untitled
+            # self.open_new_tab() # Use open_new_tab which handles None path for untitled # Commented out for web view
             # Hide the file explorer as there is no project context.
             if hasattr(self, 'left_dock_widget'): # Check if left_dock_widget exists
                 self.left_dock_widget.setVisible(False)
@@ -180,7 +204,7 @@ class MainWindow(QMainWindow):
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
                     self.add_recent_project(current_dir) # Add current directory to recent projects
-            self.open_new_tab(path) # Use open_new_tab which handles file opening
+            # self.open_new_tab(path) # Use open_new_tab which handles file opening # Commented out for web view
         else:
             print(f"Warning: Provided path is neither a file nor a directory: {path}")
             # Fallback to default behavior if path is invalid
@@ -194,13 +218,23 @@ class MainWindow(QMainWindow):
                 self.add_recent_project(default_path) # Add default path to recent projects
         
     def setup_ui(self):
-        # Central Editor View (QTabWidget)
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self.close_tab)
-        self.setCentralWidget(self.tab_widget)
-        self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
-        self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions
+        # Central Editor View (QWebEngineView)
+        self.web_view = QWebEngineView()
+
+        self.html_interface = HtmlInterfaceHandler(self) # Create instance
+        self.channel = QWebChannel(self.web_view.page())
+        self.web_view.page().setWebChannel(self.channel)
+        self.channel.registerObject("backend", self.html_interface) # Expose object as "backend"
+
+        self.web_view.setUrl(QUrl.fromLocalFile(os.path.abspath("ide_template.html")))
+        self.setCentralWidget(self.web_view)
+
+        # self.tab_widget = QTabWidget() # Commented out for web view
+        # self.tab_widget.setTabsClosable(True) # Commented out for web view
+        # self.tab_widget.tabCloseRequested.connect(self.close_tab) # Commented out for web view
+        # self.setCentralWidget(self.tab_widget) # Commented out for web view
+        # self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change) # Commented out for web view
+        # self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions # Commented out for web view
 
         # --- Debugger Panel Setup ---
         # Main widget and layout for the debugger panel
@@ -209,6 +243,7 @@ class MainWindow(QMainWindow):
 
         # Variables Panel
         self.variables_panel = QTreeWidget()
+        self.variables_panel.setObjectName("DebuggerVariablesPanel")
         self.variables_panel.setHeaderLabels(["Variable", "Value", "Type"])
         locals_item = QTreeWidgetItem(self.variables_panel, ["Locals"])
         self.variables_panel.addTopLevelItem(locals_item)
@@ -216,11 +251,13 @@ class MainWindow(QMainWindow):
 
         # Call Stack Panel
         self.call_stack_panel = QListWidget()
+        self.call_stack_panel.setObjectName("DebuggerCallStackPanel")
         self.call_stack_panel.addItem(QListWidgetItem("main.py:10 - <module>")) # Placeholder
         debugger_layout.addWidget(self.call_stack_panel)
 
         # Breakpoints Panel
         self.breakpoints_panel = QListWidget()
+        self.breakpoints_panel.setObjectName("DebuggerBreakpointsPanel")
         debugger_layout.addWidget(self.breakpoints_panel)
 
         # Store debugger_main_widget for later use in tab creation
@@ -228,8 +265,9 @@ class MainWindow(QMainWindow):
 
         # --- File Explorer Setup (modified for tabbing) ---
         self.file_explorer = FileExplorer() # Create the FileExplorer widget instance
+        self.file_explorer.setObjectName("FileExplorerTreeView")
         # Connect FileExplorer's file_opened signal to MainWindow's open_new_tab method
-        self.file_explorer.file_opened.connect(self.open_new_tab)
+        # self.file_explorer.file_opened.connect(self.open_new_tab) # Commented out for web view
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
 
@@ -249,6 +287,7 @@ class MainWindow(QMainWindow):
         
         # Add the new InteractiveTerminal widget directly to the dock
         self.terminal_widget = InteractiveTerminal(self)
+        self.terminal_widget.setObjectName("TerminalWidget")
         self.terminal_dock.setWidget(self.terminal_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
 
@@ -433,6 +472,7 @@ class MainWindow(QMainWindow):
 
         # Add other buttons to the toolbar
         self.request_control_button = QPushButton("Request Control", self)
+        self.request_control_button.setObjectName("AccentButton")
         self.request_control_button.clicked.connect(self.request_control)
         toolbar.addWidget(self.request_control_button)
         self.request_control_button.setEnabled(False) # Initially disabled
@@ -503,124 +543,128 @@ class MainWindow(QMainWindow):
     def _update_status_bar_and_language_selector_on_tab_change(self, index):
         # Disconnect from previous editor's undo stack signals if any
         # Disconnect from previous editor's document signals if any
-        if hasattr(self, '_active_editor_document') and self._active_editor_document:
-            try:
-                self._active_editor_document.undoAvailable.disconnect(self.undo_action.setEnabled)
-            except RuntimeError: # Signal was not connected or object deleted
-                pass
-            try:
-                self._active_editor_document.redoAvailable.disconnect(self.redo_action.setEnabled)
-            except RuntimeError: # Signal was not connected or object deleted
-                pass
-            self._active_editor_document = None # Clear the reference
+        # if hasattr(self, '_active_editor_document') and self._active_editor_document: # Commented out for web view
+        #     try: # Commented out for web view
+        #         self._active_editor_document.undoAvailable.disconnect(self.undo_action.setEnabled) # Commented out for web view
+        #     except RuntimeError: # Signal was not connected or object deleted # Commented out for web view
+        #         pass # Commented out for web view
+        #     try: # Commented out for web view
+        #         self._active_editor_document.redoAvailable.disconnect(self.redo_action.setEnabled) # Commented out for web view
+        #     except RuntimeError: # Signal was not connected or object deleted # Commented out for web view
+        #         pass # Commented out for web view
+        #     self._active_editor_document = None # Clear the reference # Commented out for web view
 
-        editor = self.tab_widget.widget(index)
-        if isinstance(editor, CodeEditor):
-            self._active_editor_document = editor.document()
+        # editor = self.tab_widget.widget(index) if hasattr(self, 'tab_widget') else None # Commented out for web view
+        # if isinstance(editor, CodeEditor): # Commented out for web view
+        #     self._active_editor_document = editor.document() # Commented out for web view
 
-            self._active_editor_document.undoAvailable.connect(self.undo_action.setEnabled)
-            self._active_editor_document.redoAvailable.connect(self.redo_action.setEnabled)
+        #     self._active_editor_document.undoAvailable.connect(self.undo_action.setEnabled) # Commented out for web view
+        #     self._active_editor_document.redoAvailable.connect(self.redo_action.setEnabled) # Commented out for web view
             
-            # Immediately update state
-            self.undo_action.setEnabled(self._active_editor_document.isUndoAvailable())
-            self.redo_action.setEnabled(self._active_editor_document.isRedoAvailable())
+        #     # Immediately update state # Commented out for web view
+        #     self.undo_action.setEnabled(self._active_editor_document.isUndoAvailable()) # Commented out for web view
+        #     self.redo_action.setEnabled(self._active_editor_document.isRedoAvailable()) # Commented out for web view
 
-            # Update status bar labels
-            self.language_label.setText(f"Language: {editor.current_language}")
-            self._update_cursor_position_label(editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1)
+        #     # Update status bar labels # Commented out for web view
+        #     self.language_label.setText(f"Language: {editor.current_language}") # Commented out for web view
+        #     self._update_cursor_position_label(editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1) # Commented out for web view
             
-            # Auto-select language in QComboBox
-            file_path = self.editor_to_path.get(editor)
+        #     # Auto-select language in QComboBox # Commented out for web view
+        #     file_path = self.editor_to_path.get(editor) # Commented out for web view
 
-            if file_path and not file_path.startswith("untitled:"):
-                file_extension = os.path.splitext(file_path)[1].lower()
-                detected_language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
-                idx = self.language_selector.findText(detected_language)
-                if idx != -1:
-                    self.language_selector.setCurrentIndex(idx)
-                else: # Fallback for unknown extensions
-                    self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text"))
-            else: # Untitled file or no path
-                self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text"))
-        else:
-            # Not a CodeEditor tab, or no editor
-            if hasattr(self, 'undo_action'): self.undo_action.setEnabled(False) # Check existence
-            if hasattr(self, 'redo_action'): self.redo_action.setEnabled(False) # Check existence
-            self._active_editor_undo_stack = None # Ensure it's cleared
+        #     if file_path and not file_path.startswith("untitled:"): # Commented out for web view
+        #         file_extension = os.path.splitext(file_path)[1].lower() # Commented out for web view
+        #         detected_language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text") # Commented out for web view
+        #         idx = self.language_selector.findText(detected_language) # Commented out for web view
+        #         if idx != -1: # Commented out for web view
+        #             self.language_selector.setCurrentIndex(idx) # Commented out for web view
+        #         else: # Fallback for unknown extensions # Commented out for web view
+        #             self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text")) # Commented out for web view
+        #     else: # Untitled file or no path # Commented out for web view
+        #         self.language_selector.setCurrentIndex(self.language_selector.findText("Plain Text")) # Commented out for web view
+        # else: # Commented out for web view
+        #     # Not a CodeEditor tab, or no editor # Commented out for web view
+        #     if hasattr(self, 'undo_action'): self.undo_action.setEnabled(False) # Check existence # Commented out for web view
+        #     if hasattr(self, 'redo_action'): self.redo_action.setEnabled(False) # Check existence # Commented out for web view
+        #     self._active_editor_undo_stack = None # Ensure it's cleared # Commented out for web view
 
-            self.language_label.setText("Language: N/A")
-            self.cursor_pos_label.setText("Ln 1, Col 1")
-            # Set language selector to Plain Text if it exists
-            if hasattr(self, 'language_selector'):
-                plain_text_idx = self.language_selector.findText("Plain Text")
-                if plain_text_idx != -1:
-                    self.language_selector.setCurrentIndex(plain_text_idx)
-                elif self.language_selector.count() > 0: # Fallback to first item if "Plain Text" not found
-                    self.language_selector.setCurrentIndex(0)
+        #     self.language_label.setText("Language: N/A") # Commented out for web view
+        #     self.cursor_pos_label.setText("Ln 1, Col 1") # Commented out for web view
+        #     # Set language selector to Plain Text if it exists # Commented out for web view
+        #     if hasattr(self, 'language_selector'): # Commented out for web view
+        #         plain_text_idx = self.language_selector.findText("Plain Text") # Commented out for web view
+        #         if plain_text_idx != -1: # Commented out for web view
+        #             self.language_selector.setCurrentIndex(plain_text_idx) # Commented out for web view
+        #         elif self.language_selector.count() > 0: # Fallback to first item if "Plain Text" not found # Commented out for web view
+        #             self.language_selector.setCurrentIndex(0) # Commented out for web view
 
-            # Update breakpoint display for the current editor if it's a CodeEditor
-            if isinstance(editor, CodeEditor):
-                file_path = editor.file_path # Relies on CodeEditor having file_path property
-                current_file_breakpoints = self.active_breakpoints.get(file_path, set())
-                editor.gutter.update_breakpoints_display(current_file_breakpoints)
-            # If not a CodeEditor, no gutter to update.
+        #     # Update breakpoint display for the current editor if it's a CodeEditor # Commented out for web view
+        #     if isinstance(editor, CodeEditor): # Commented out for web view
+        #         file_path = editor.file_path # Relies on CodeEditor having file_path property # Commented out for web view
+        #         current_file_breakpoints = self.active_breakpoints.get(file_path, set()) # Commented out for web view
+        #         editor.gutter.update_breakpoints_display(current_file_breakpoints) # Commented out for web view
+            # If not a CodeEditor, no gutter to update. # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     @Slot()
     def join_session_from_welcome_page(self):
         """Public slot to initiate joining a session from the welcome page."""
         self.connect_to_host_session()
         # After attempting to connect, initialize_project(None) will set up the client-only UI
-        self.initialize_project(None)
+        # self.initialize_project(None) # Commented out for web view
 
     @Slot()
     def on_text_editor_changed(self):
-        current_editor = self._get_current_code_editor()
-        if not current_editor or self.is_updating_from_network:
-            return
+        # current_editor = self._get_current_code_editor() # Commented out for web view
+        # if not current_editor or self.is_updating_from_network: # Commented out for web view
+        #     return # Commented out for web view
 
-        path = self.editor_to_path.get(current_editor)
-        if not path:
-            # Handle untitled tabs or errors
-            if current_editor.toPlainText(): # If there's any text, it's dirty from its initial state
-                tab_index = self.tab_widget.indexOf(current_editor)
-                if tab_index != -1:
-                    current_tab_text = self.tab_widget.tabText(tab_index)
-                    if not current_tab_text.endswith("*"):
-                        self.tab_widget.setTabText(tab_index, current_tab_text + "*")
-            return # Do not call FileManager for untracked paths (e.g. untitled)
+        # path = self.editor_to_path.get(current_editor) # Commented out for web view
+        # if not path: # Commented out for web view
+        #     # Handle untitled tabs or errors # Commented out for web view
+        #     if current_editor.toPlainText(): # If there's any text, it's dirty from its initial state # Commented out for web view
+        #         tab_index = self.tab_widget.indexOf(current_editor) # Commented out for web view
+        #         if tab_index != -1: # Commented out for web view
+        #             current_tab_text = self.tab_widget.tabText(tab_index) # Commented out for web view
+        #             if not current_tab_text.endswith("*"): # Commented out for web view
+        #                 self.tab_widget.setTabText(tab_index, current_tab_text + "*") # Commented out for web view
+        #     return # Do not call FileManager for untracked paths (e.g. untitled) # Commented out for web view
 
-        # For tracked files, delegate to FileManager
-        self.file_manager.update_file_content_changed(path, current_editor.toPlainText())
+        # # For tracked files, delegate to FileManager # Commented out for web view
+        # self.file_manager.update_file_content_changed(path, current_editor.toPlainText()) # Commented out for web view
         
-        # Network sync logic (keep as is for now)
-        if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly():
-            text = current_editor.toPlainText()
-            self.network_manager.send_data('TEXT_UPDATE', text) # This part remains
+        # # Network sync logic (keep as is for now) # Commented out for web view
+        # if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly(): # Commented out for web view
+        #     text = current_editor.toPlainText() # Commented out for web view
+        #     self.network_manager.send_data('TEXT_UPDATE', text) # This part remains # Commented out for web view
         
-        self._update_undo_redo_actions()
+        # self._update_undo_redo_actions() # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     @Slot(str)
     def on_network_data_received(self, data):
-        print(f"8. Editor update slot called. Received data parameter: {data[:50]}...")
-        current_editor = self._get_current_code_editor() # Use helper
-        if current_editor:
-            try:
-                # The data parameter is already the content string, not the full JSON message.
-                # No need to json.loads() here.
-                content = data
-                print(f"LOG: MainWindow.on_network_data_received - Parsed message in MainWindow: (content directly used)")
-                self.is_updating_from_network = True
-                current_cursor_pos = current_editor.textCursor().position()
-                print(f"LOG: MainWindow.on_network_data_received - Setting text: {content[:50]}...")
-                current_editor.setPlainText(content)
-                cursor = current_editor.textCursor()
-                cursor.setPosition(current_cursor_pos)
-                current_editor.setTextCursor(cursor)
-                self.is_updating_from_network = False
-                self._update_undo_redo_actions() # Update after network change
-            except Exception as e:
-                print(f"LOG: MainWindow.on_network_data_received - Error processing received data: {e}")
-        print("LOG: MainWindow.on_network_data_received - Exit")
+        # print(f"8. Editor update slot called. Received data parameter: {data[:50]}...") # Commented out for web view
+        # current_editor = self._get_current_code_editor() # Use helper # Commented out for web view
+        # if current_editor: # Commented out for web view
+        #     try: # Commented out for web view
+        #         # The data parameter is already the content string, not the full JSON message. # Commented out for web view
+        #         # No need to json.loads() here. # Commented out for web view
+        #         content = data # Commented out for web view
+        #         print(f"LOG: MainWindow.on_network_data_received - Parsed message in MainWindow: (content directly used)") # Commented out for web view
+        #         self.is_updating_from_network = True # Commented out for web view
+        #         current_cursor_pos = current_editor.textCursor().position() # Commented out for web view
+        #         print(f"LOG: MainWindow.on_network_data_received - Setting text: {content[:50]}...") # Commented out for web view
+        #         current_editor.setPlainText(content) # Commented out for web view
+        #         cursor = current_editor.textCursor() # Commented out for web view
+        #         cursor.setPosition(current_cursor_pos) # Commented out for web view
+        #         current_editor.setTextCursor(cursor) # Commented out for web view
+        #         self.is_updating_from_network = False # Commented out for web view
+        #         self._update_undo_redo_actions() # Update after network change # Commented out for web view
+        #     except Exception as e: # Commented out for web view
+        #         print(f"LOG: MainWindow.on_network_data_received - Error processing received data: {e}") # Commented out for web view
+        # print("LOG: MainWindow.on_network_data_received - Exit") # Commented out for web view
+        pass # Functionality related to tab_widget commented out
+
 
     @Slot()
     def on_peer_connected(self):
@@ -696,65 +740,67 @@ class MainWindow(QMainWindow):
 
     def _get_current_code_editor(self):
         """Helper to get the current CodeEditor widget, or None if not a CodeEditor."""
-        current_widget = self.tab_widget.currentWidget()
-        if isinstance(current_widget, CodeEditor):
-            return current_widget
-        return None
+        # current_widget = self.tab_widget.currentWidget() if hasattr(self, 'tab_widget') else None # Commented out for web view
+        # if isinstance(current_widget, CodeEditor): # Commented out for web view
+        #     return current_widget # Commented out for web view
+        return None # Commented out for web view
 
     # New _handle_run_request method
     @Slot()
     def _handle_run_request(self):
-        editor = self._get_current_code_editor()
-        if not editor:
-            self.status_bar.showMessage("No active editor to run.", 3000)
-            return
+        # editor = self._get_current_code_editor() # Commented out for web view
+        # if not editor: # Commented out for web view
+        #     self.status_bar.showMessage("No active editor to run.", 3000) # Commented out for web view
+        #     return # Commented out for web view
 
-        if not self.save_current_file():
-            self.status_bar.showMessage("Save operation cancelled or failed. Run aborted.", 3000)
-            return
+        # if not self.save_current_file(): # Commented out for web view
+        #     self.status_bar.showMessage("Save operation cancelled or failed. Run aborted.", 3000) # Commented out for web view
+        #     return # Commented out for web view
 
-        file_path = self.editor_to_path.get(editor)
-        if not file_path or file_path.startswith("untitled:"):
-            QMessageBox.warning(self, "Execution Error", "Please save the file before running.")
-            return
+        # file_path = self.editor_to_path.get(editor) # Commented out for web view
+        # if not file_path or file_path.startswith("untitled:"): # Commented out for web view
+        #     QMessageBox.warning(self, "Execution Error", "Please save the file before running.") # Commented out for web view
+        #     return # Commented out for web view
 
-        _, extension = os.path.splitext(file_path)
-        language_name = self.EXTENSION_TO_LANGUAGE.get(extension.lower())
-        if not language_name:
-            QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.")
-            return
+        # _, extension = os.path.splitext(file_path) # Commented out for web view
+        # language_name = self.EXTENSION_TO_LANGUAGE.get(extension.lower()) # Commented out for web view
+        # if not language_name: # Commented out for web view
+        #     QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.") # Commented out for web view
+        #     return # Commented out for web view
 
-        command_template_list = self.RUNNER_CONFIG.get(language_name)
-        if not command_template_list:
-            QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
-            return
+        # command_template_list = self.RUNNER_CONFIG.get(language_name) # Commented out for web view
+        # if not command_template_list: # Commented out for web view
+        #     QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.") # Commented out for web view
+        #     return # Commented out for web view
 
-        working_dir = os.path.dirname(file_path) or os.getcwd()
-        output_file_no_ext = os.path.splitext(file_path)[0]
+        # working_dir = os.path.dirname(file_path) or os.getcwd() # Commented out for web view
+        # output_file_no_ext = os.path.splitext(file_path)[0] # Commented out for web view
 
-        command_parts = []
-        for part in command_template_list:
-            part = part.replace("{file}", file_path)
-            part = part.replace("{output_file}", output_file_no_ext)
-            command_parts.append(part)
+        # command_parts = [] # Commented out for web view
+        # for part in command_template_list: # Commented out for web view
+        #     part = part.replace("{file}", file_path) # Commented out for web view
+        #     part = part.replace("{output_file}", output_file_no_ext) # Commented out for web view
+        #     command_parts.append(part) # Commented out for web view
         
-        if not command_parts:
-            QMessageBox.warning(self, "Execution Error", "Command became empty after processing template.")
-            return
+        # if not command_parts: # Commented out for web view
+        #     QMessageBox.warning(self, "Execution Error", "Command became empty after processing template.") # Commented out for web view
+        #     return # Commented out for web view
 
-        self.process_manager.execute(command_parts, working_dir)
+        # self.process_manager.execute(command_parts, working_dir) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     # _run_diagnostic_test is removed as its functionality is superseded by ProcessManager.
 
     def update_editor_read_only_state(self):
-        current_editor = self._get_current_code_editor()
-        if current_editor:
-            if self.network_manager.is_connected():
-                # Editor is read-only if we don't have control in a session
-                current_editor.setReadOnly(not self.has_control)
-            else:
-                # If not in a session, editor is always writable
-                current_editor.setReadOnly(False)
+        # current_editor = self._get_current_code_editor() # Commented out for web view
+        # if current_editor: # Commented out for web view
+        #     if self.network_manager.is_connected(): # Commented out for web view
+        #         # Editor is read-only if we don't have control in a session # Commented out for web view
+        #         current_editor.setReadOnly(not self.has_control) # Commented out for web view
+        #     else: # Commented out for web view
+        #         # If not in a session, editor is always writable # Commented out for web view
+        #         current_editor.setReadOnly(False) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     def update_ui_for_control_state(self):
         # Update status bar message
@@ -779,8 +825,9 @@ class MainWindow(QMainWindow):
             self.request_control_button.setEnabled(False) # Only client can request control
 
         # Update editor read-only state
-        self.update_editor_read_only_state()
-        print(f"LOG: update_ui_for_control_state - is_host={self.is_host}, has_control={self.has_control}, editor_read_only={self._get_current_code_editor().isReadOnly() if self._get_current_code_editor() else 'N/A'}")
+        # self.update_editor_read_only_state() # Commented out for web view
+        # print(f"LOG: update_ui_for_control_state - is_host={self.is_host}, has_control={self.has_control}, editor_read_only={self._get_current_code_editor().isReadOnly() if self._get_current_code_editor() else 'N/A'}") # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     @Slot()
     def request_control(self):
@@ -851,136 +898,140 @@ class MainWindow(QMainWindow):
             count += 1
 
     def open_new_tab(self, file_path=None):
-        if file_path:
-            # Check if already open via path_to_editor to avoid duplicate signal emission if already there
-            if file_path in self.path_to_editor:
-                editor = self.path_to_editor[file_path]
-                # Bring tab to front
-                for i in range(self.tab_widget.count()):
-                    if self.tab_widget.widget(i) == editor:
-                        self.tab_widget.setCurrentIndex(i)
-                        return
-            self.file_manager.open_file(file_path)
-        else:
-            # Handle new, untitled file (not tracked by FileManager until first save)
-            editor = CodeEditor(self)
-            tab_title = self._get_next_untitled_name()
-            # Use a unique placeholder for untitled files in local tracking
-            # The placeholder includes "untitled:" prefix and the unique name.
-            untitled_path_placeholder = f"untitled:{tab_title}"
+        # if file_path: # Commented out for web view
+        #     # Check if already open via path_to_editor to avoid duplicate signal emission if already there # Commented out for web view
+        #     if file_path in self.path_to_editor: # Commented out for web view
+        #         editor = self.path_to_editor[file_path] # Commented out for web view
+        #         # Bring tab to front # Commented out for web view
+        #         for i in range(self.tab_widget.count()): # Commented out for web view
+        #             if self.tab_widget.widget(i) == editor: # Commented out for web view
+        #                 self.tab_widget.setCurrentIndex(i) # Commented out for web view
+        #                 return # Commented out for web view
+        #     self.file_manager.open_file(file_path) # Commented out for web view
+        # else: # Commented out for web view
+        #     # Handle new, untitled file (not tracked by FileManager until first save) # Commented out for web view
+        #     editor = CodeEditor(self) # Commented out for web view
+        #     tab_title = self._get_next_untitled_name() # Commented out for web view
+        #     # Use a unique placeholder for untitled files in local tracking # Commented out for web view
+        #     # The placeholder includes "untitled:" prefix and the unique name. # Commented out for web view
+        #     untitled_path_placeholder = f"untitled:{tab_title}" # Commented out for web view
 
-            index = self.tab_widget.addTab(editor, tab_title)
-            self.tab_widget.setCurrentIndex(index)
-            self.tab_widget.setTabToolTip(index, tab_title) # Tooltip is just "Untitled-N"
+        #     index = self.tab_widget.addTab(editor, tab_title) # Commented out for web view
+        #     self.tab_widget.setCurrentIndex(index) # Commented out for web view
+        #     self.tab_widget.setTabToolTip(index, tab_title) # Tooltip is just "Untitled-N" # Commented out for web view
 
-            self.editor_to_path[editor] = untitled_path_placeholder
-            self.path_to_editor[untitled_path_placeholder] = editor
-            editor.file_path = untitled_path_placeholder # For consistency with editor's own tracking
+        #     self.editor_to_path[editor] = untitled_path_placeholder # Commented out for web view
+        #     self.path_to_editor[untitled_path_placeholder] = editor # Commented out for web view
+        #     editor.file_path = untitled_path_placeholder # For consistency with editor's own tracking # Commented out for web view
 
-            # Connect signals for this new editor
-            editor.textChanged.connect(self.on_text_editor_changed)
-            editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
-            editor.language_changed_signal.connect(self._update_language_label)
-            editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
+        #     # Connect signals for this new editor # Commented out for web view
+        #     editor.textChanged.connect(self.on_text_editor_changed) # Commented out for web view
+        #     editor.cursor_position_changed_signal.connect(self._update_cursor_position_label) # Commented out for web view
+        #     editor.language_changed_signal.connect(self._update_language_label) # Commented out for web view
+        #     editor.control_reclaim_requested.connect(self.on_host_reclaim_control) # Commented out for web view
 
-            self._update_status_bar_and_language_selector_on_tab_change(index)
-            self.update_editor_read_only_state()
-            self._update_undo_redo_actions()
-            # Mark untitled tab as dirty immediately if it has content, or if it's truly new (no content but needs saving)
-            # For a brand new untitled tab, it should show as dirty.
-            self._handle_dirty_status_changed(untitled_path_placeholder, True)
+        #     self._update_status_bar_and_language_selector_on_tab_change(index) # Commented out for web view
+        #     self.update_editor_read_only_state() # Commented out for web view
+        #     self._update_undo_redo_actions() # Commented out for web view
+        #     # Mark untitled tab as dirty immediately if it has content, or if it's truly new (no content but needs saving) # Commented out for web view
+        #     # For a brand new untitled tab, it should show as dirty. # Commented out for web view
+        #     self._handle_dirty_status_changed(untitled_path_placeholder, True) # Commented out for web view
 
-            # Connect breakpoint toggled signal for new untitled editor
-            editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled)
+        #     # Connect breakpoint toggled signal for new untitled editor # Commented out for web view
+        #     editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
 
     @Slot(str, str) # path, content
     def _handle_file_opened(self, path, content):
-        if path in self.path_to_editor:
-            editor = self.path_to_editor[path]
-            if editor in self.editor_to_path:
-                for i in range(self.tab_widget.count()):
-                    if self.tab_widget.widget(i) == editor:
-                        self.tab_widget.setCurrentIndex(i)
-                        # Potentially update content if it changed externally, though FileManager handles initial load
-                        # editor.setPlainText(content) # Consider if this is needed or if FM ensures latest
-                        return
-            print(f"Warning: Path {path} in path_to_editor but editor not found in tabs or editor_to_path.")
+        # if path in self.path_to_editor: # Commented out for web view
+        #     editor = self.path_to_editor[path] # Commented out for web view
+        #     if editor in self.editor_to_path: # Commented out for web view
+        #         for i in range(self.tab_widget.count()): # Commented out for web view
+        #             if self.tab_widget.widget(i) == editor: # Commented out for web view
+        #                 self.tab_widget.setCurrentIndex(i) # Commented out for web view
+        #                 # Potentially update content if it changed externally, though FileManager handles initial load # Commented out for web view
+        #                 # editor.setPlainText(content) # Consider if this is needed or if FM ensures latest # Commented out for web view
+        #                 return # Commented out for web view
+        #     print(f"Warning: Path {path} in path_to_editor but editor not found in tabs or editor_to_path.") # Commented out for web view
 
-        editor = CodeEditor(self)
-        editor.setPlainText(content)
-        editor.file_path = path # Important: Set file_path on editor for its own reference
+        # editor = CodeEditor(self) # Commented out for web view
+        # editor.setPlainText(content) # Commented out for web view
+        # editor.file_path = path # Important: Set file_path on editor for its own reference # Commented out for web view
 
-        editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label(
-            editor.textCursor().blockNumber() + 1,
-            editor.textCursor().columnNumber() + 1
-        ))
+        # editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label( # Commented out for web view
+        #     editor.textCursor().blockNumber() + 1, # Commented out for web view
+        #     editor.textCursor().columnNumber() + 1 # Commented out for web view
+        # )) # Commented out for web view
 
-        file_extension = os.path.splitext(path)[1].lower()
-        language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
-        editor.set_file_path_and_update_language(path)
+        # file_extension = os.path.splitext(path)[1].lower() # Commented out for web view
+        # language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text") # Commented out for web view
+        # editor.set_file_path_and_update_language(path) # Commented out for web view
 
-        tab_name = os.path.basename(path)
-        new_tab_index = self.tab_widget.addTab(editor, tab_name)
-        self.tab_widget.setCurrentIndex(new_tab_index)
-        self.tab_widget.setTabToolTip(new_tab_index, path)
+        # tab_name = os.path.basename(path) # Commented out for web view
+        # new_tab_index = self.tab_widget.addTab(editor, tab_name) # Commented out for web view
+        # self.tab_widget.setCurrentIndex(new_tab_index) # Commented out for web view
+        # self.tab_widget.setTabToolTip(new_tab_index, path) # Commented out for web view
 
-        self.editor_to_path[editor] = path
-        self.path_to_editor[path] = editor
+        # self.editor_to_path[editor] = path # Commented out for web view
+        # self.path_to_editor[path] = editor # Commented out for web view
 
-        editor.textChanged.connect(self.on_text_editor_changed)
-        editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
-        editor.language_changed_signal.connect(self._update_language_label)
-        editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
-        editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled) # Connect signal
+        # editor.textChanged.connect(self.on_text_editor_changed) # Commented out for web view
+        # editor.cursor_position_changed_signal.connect(self._update_cursor_position_label) # Commented out for web view
+        # editor.language_changed_signal.connect(self._update_language_label) # Commented out for web view
+        # editor.control_reclaim_requested.connect(self.on_host_reclaim_control) # Commented out for web view
+        # editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled) # Connect signal # Commented out for web view
 
-        self._update_status_bar_and_language_selector_on_tab_change(new_tab_index)
-        self.update_editor_read_only_state()
-        self._update_undo_redo_actions()
-        self.status_bar.showMessage(f"Opened {path}", 2000)
+        # self._update_status_bar_and_language_selector_on_tab_change(new_tab_index) # Commented out for web view
+        # self.update_editor_read_only_state() # Commented out for web view
+        # self._update_undo_redo_actions() # Commented out for web view
+        # self.status_bar.showMessage(f"Opened {path}", 2000) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
+
 
     @Slot(int)
     def _handle_breakpoint_toggled(self, line_number):
-        editor = self._get_current_code_editor()
-        if not editor:
-            return
+        # editor = self._get_current_code_editor() # Commented out for web view
+        # if not editor: # Commented out for web view
+        #     return # Commented out for web view
 
-        # Use the file_path property from the CodeEditor (QWidget)
-        file_path = editor.file_path
+        # # Use the file_path property from the CodeEditor (QWidget) # Commented out for web view
+        # file_path = editor.file_path # Commented out for web view
 
-        if not file_path or file_path.startswith("untitled:"):
-            QMessageBox.warning(self, "Breakpoints", "Please save the file before setting breakpoints.")
-            return
+        # if not file_path or file_path.startswith("untitled:"): # Commented out for web view
+        #     QMessageBox.warning(self, "Breakpoints", "Please save the file before setting breakpoints.") # Commented out for web view
+        #     return # Commented out for web view
 
-        if file_path not in self.active_breakpoints:
-            self.active_breakpoints[file_path] = set()
+        # if file_path not in self.active_breakpoints: # Commented out for web view
+        #     self.active_breakpoints[file_path] = set() # Commented out for web view
 
-        if line_number in self.active_breakpoints[file_path]:
-            self.active_breakpoints[file_path].remove(line_number)
-        else:
-            self.active_breakpoints[file_path].add(line_number)
+        # if line_number in self.active_breakpoints[file_path]: # Commented out for web view
+        #     self.active_breakpoints[file_path].remove(line_number) # Commented out for web view
+        # else: # Commented out for web view
+        #     self.active_breakpoints[file_path].add(line_number) # Commented out for web view
 
-        # Update the Breakpoints Panel
-        self.breakpoints_panel.clear()
-        for path, lines in self.active_breakpoints.items():
-            if not lines: # Skip if no lines for this path, or if lines is None
-                continue
-            path_basename = os.path.basename(path) # Get basename for display
-            for line in sorted(list(lines)):
-                self.breakpoints_panel.addItem(QListWidgetItem(f"{path_basename}:{line}"))
+        # # Update the Breakpoints Panel # Commented out for web view
+        # self.breakpoints_panel.clear() # Commented out for web view
+        # for path, lines in self.active_breakpoints.items(): # Commented out for web view
+        #     if not lines: # Skip if no lines for this path, or if lines is None # Commented out for web view
+        #         continue # Commented out for web view
+        #     path_basename = os.path.basename(path) # Get basename for display # Commented out for web view
+        #     for line in sorted(list(lines)): # Commented out for web view
+        #         self.breakpoints_panel.addItem(QListWidgetItem(f"{path_basename}:{line}")) # Commented out for web view
 
-        # Trigger gutter re-render on the current editor's gutter
-        editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set()))
+        # # Trigger gutter re-render on the current editor's gutter # Commented out for web view
+        # editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set())) # Commented out for web view
 
-        # Also update DebugManager's internal list and the adapter if a session is active
-        lines_for_file = self.active_breakpoints.get(file_path, set())
-        self.debug_manager.update_internal_breakpoints(file_path, lines_for_file)
+        # # Also update DebugManager's internal list and the adapter if a session is active # Commented out for web view
+        # lines_for_file = self.active_breakpoints.get(file_path, set()) # Commented out for web view
+        # self.debug_manager.update_internal_breakpoints(file_path, lines_for_file) # Commented out for web view
 
-        # Check if DAP client is connected and handshake is complete before sending to adapter
-        if self.debug_manager.dap_client and \
-           self.debug_manager.dap_client.isOpen() and \
-           self.debug_manager._dap_request_pending_response.get('handshake_complete', False):
-            self.debug_manager.set_breakpoints_on_adapter(file_path, list(lines_for_file))
+        # # Check if DAP client is connected and handshake is complete before sending to adapter # Commented out for web view
+        # if self.debug_manager.dap_client and \ # Commented out for web view
+        #    self.debug_manager.dap_client.isOpen() and \ # Commented out for web view
+        #    self.debug_manager._dap_request_pending_response.get('handshake_complete', False): # Commented out for web view
+        #     self.debug_manager.set_breakpoints_on_adapter(file_path, list(lines_for_file)) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
 
     @Slot(str, str) # path, error_message
@@ -990,35 +1041,37 @@ class MainWindow(QMainWindow):
 
     @Slot(str, bool) # path, is_dirty
     def _handle_dirty_status_changed(self, path, is_dirty):
-        if path in self.path_to_editor:
-            editor = self.path_to_editor[path]
-            tab_index = self.tab_widget.indexOf(editor)
-            if tab_index != -1:
-                current_tab_text = self.tab_widget.tabText(tab_index)
-                if is_dirty:
-                    if not current_tab_text.endswith("*"):
-                        self.tab_widget.setTabText(tab_index, current_tab_text + "*")
-                else:
-                    if current_tab_text.endswith("*"):
-                        self.tab_widget.setTabText(tab_index, current_tab_text[:-1])
-        # Also handle untitled placeholders directly, as they are in path_to_editor
-        elif path.startswith("untitled:"):
-            if path in self.path_to_editor:
-                editor = self.path_to_editor[path]
-                tab_index = self.tab_widget.indexOf(editor)
-                if tab_index != -1:
-                    current_tab_text = self.tab_widget.tabText(tab_index)
-                    # Untitled tabs are marked dirty if is_dirty is true (e.g. on creation or content change)
-                    if is_dirty:
-                        if not current_tab_text.endswith("*"):
-                            self.tab_widget.setTabText(tab_index, current_tab_text + "*")
-                    else: # This case might be less common for untitled unless saved
-                        if current_tab_text.endswith("*"):
-                             self.tab_widget.setTabText(tab_index, current_tab_text[:-1])
-            else:
-                print(f"Warning: dirty_status_changed for untracked untitled path: {path}")
-        else:
-            print(f"Warning: dirty_status_changed for untracked path: {path}")
+        # if path in self.path_to_editor: # Commented out for web view
+        #     editor = self.path_to_editor[path] # Commented out for web view
+        #     tab_index = self.tab_widget.indexOf(editor) # Commented out for web view
+        #     if tab_index != -1: # Commented out for web view
+        #         current_tab_text = self.tab_widget.tabText(tab_index) # Commented out for web view
+        #         if is_dirty: # Commented out for web view
+        #             if not current_tab_text.endswith("*"): # Commented out for web view
+        #                 self.tab_widget.setTabText(tab_index, current_tab_text + "*") # Commented out for web view
+        #         else: # Commented out for web view
+        #             if current_tab_text.endswith("*"): # Commented out for web view
+        #                 self.tab_widget.setTabText(tab_index, current_tab_text[:-1]) # Commented out for web view
+        # # Also handle untitled placeholders directly, as they are in path_to_editor # Commented out for web view
+        # elif path.startswith("untitled:"): # Commented out for web view
+        #     if path in self.path_to_editor: # Commented out for web view
+        #         editor = self.path_to_editor[path] # Commented out for web view
+        #         tab_index = self.tab_widget.indexOf(editor) # Commented out for web view
+        #         if tab_index != -1: # Commented out for web view
+        #             current_tab_text = self.tab_widget.tabText(tab_index) # Commented out for web view
+        #             # Untitled tabs are marked dirty if is_dirty is true (e.g. on creation or content change) # Commented out for web view
+        #             if is_dirty: # Commented out for web view
+        #                 if not current_tab_text.endswith("*"): # Commented out for web view
+        #                     self.tab_widget.setTabText(tab_index, current_tab_text + "*") # Commented out for web view
+        #             else: # This case might be less common for untitled unless saved # Commented out for web view
+        #                 if current_tab_text.endswith("*"): # Commented out for web view
+        #                      self.tab_widget.setTabText(tab_index, current_tab_text[:-1]) # Commented out for web view
+        #     else: # Commented out for web view
+        #         print(f"Warning: dirty_status_changed for untracked untitled path: {path}") # Commented out for web view
+        # else: # Commented out for web view
+        #     print(f"Warning: dirty_status_changed for untracked path: {path}") # Commented out for web view
+        pass # Functionality related to tab_widget commented out
+
 
     def open_folder(self):
         dialog = QFileDialog(self)
@@ -1026,78 +1079,82 @@ class MainWindow(QMainWindow):
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
         if dialog.exec():
             selected_directory = dialog.selectedFiles()[0]
-            self.file_explorer.set_root_path(selected_directory)
+            if hasattr(self, 'file_explorer'): # Check if file_explorer exists
+                self.file_explorer.set_root_path(selected_directory)
             self.setWindowTitle(f"Aether Editor - {os.path.basename(selected_directory)}")
-            self.terminal_widget.start_shell(selected_directory) # Start shell in new directory
+            if hasattr(self, 'terminal_widget'): # Check if terminal_widget exists
+                self.terminal_widget.start_shell(selected_directory) # Start shell in new directory
             self.add_recent_project(selected_directory) # Add to recent projects
             self.save_session() # Save session after opening folder
 
     def close_tab(self, index=None): # Made index optional as per later definition
-        if index is None:
-            index_to_close = self.tab_widget.currentIndex()
-        else:
-            index_to_close = index
+        # if index is None: # Commented out for web view
+        #     index_to_close = self.tab_widget.currentIndex() if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        # else: # Commented out for web view
+        #     index_to_close = index # Commented out for web view
         
-        if index_to_close == -1:
-            return
+        # if index_to_close == -1: # Commented out for web view
+        #     return # Commented out for web view
 
-        widget = self.tab_widget.widget(index_to_close)
-        if widget is not None:
-            # Disconnect signals first
-            if isinstance(widget, CodeEditor):
-                try:
-                    widget.textChanged.disconnect(self.on_text_editor_changed)
-                    widget.control_reclaim_requested.disconnect(self.on_host_reclaim_control)
-                    # Attempt to disconnect other signals if they were connected
-                    widget.cursor_position_changed_signal.disconnect(self._update_cursor_position_label)
-                    widget.language_changed_signal.disconnect(self._update_language_label)
-                except RuntimeError: # Signal already disconnected
-                    pass
+        # widget = self.tab_widget.widget(index_to_close) if hasattr(self, 'tab_widget') else None # Commented out for web view
+        # if widget is not None: # Commented out for web view
+        #     # Disconnect signals first # Commented out for web view
+        #     if isinstance(widget, CodeEditor): # Commented out for web view
+        #         try: # Commented out for web view
+        #             widget.textChanged.disconnect(self.on_text_editor_changed) # Commented out for web view
+        #             widget.control_reclaim_requested.disconnect(self.on_host_reclaim_control) # Commented out for web view
+        #             # Attempt to disconnect other signals if they were connected # Commented out for web view
+        #             widget.cursor_position_changed_signal.disconnect(self._update_cursor_position_label) # Commented out for web view
+        #             widget.language_changed_signal.disconnect(self._update_language_label) # Commented out for web view
+        #         except RuntimeError: # Signal already disconnected # Commented out for web view
+        #             pass # Commented out for web view
             
-            path_for_editor = self.editor_to_path.get(widget)
-            proceed_with_close = True # Assume we can close unless dirty check says otherwise
+        #     path_for_editor = self.editor_to_path.get(widget) # Commented out for web view
+        #     proceed_with_close = True # Assume we can close unless dirty check says otherwise # Commented out for web view
 
-            if path_for_editor:
-                is_dirty = False
-                if path_for_editor.startswith("untitled:"):
-                    # Check UI for dirty state of untitled tab
-                    if self.tab_widget.tabText(index_to_close).endswith("*"):
-                        is_dirty = True
-                elif path_for_editor in self.file_manager.open_files_data:
-                    is_dirty = self.file_manager.get_dirty_state(path_for_editor)
+        #     if path_for_editor: # Commented out for web view
+        #         is_dirty = False # Commented out for web view
+        #         if path_for_editor.startswith("untitled:"): # Commented out for web view
+        #             # Check UI for dirty state of untitled tab # Commented out for web view
+        #             if hasattr(self, 'tab_widget') and self.tab_widget.tabText(index_to_close).endswith("*"): # Commented out for web view
+        #                 is_dirty = True # Commented out for web view
+        #         elif path_for_editor in self.file_manager.open_files_data: # Commented out for web view
+        #             is_dirty = self.file_manager.get_dirty_state(path_for_editor) # Commented out for web view
 
-                if is_dirty:
-                    # Prompt for this specific tab
-                    tab_name = self.tab_widget.tabText(index_to_close)
-                    reply = QMessageBox.question(self, f"Unsaved Changes - {tab_name}",
-                                                 f"'{tab_name}' has unsaved changes. Save before closing?",
-                                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                                                 QMessageBox.Save)
-                    if reply == QMessageBox.Cancel:
-                        proceed_with_close = False
-                    elif reply == QMessageBox.Save:
-                        if not self._save_file(index_to_close): # Attempt to save
-                            # User cancelled the save dialog
-                            proceed_with_close = False
-                    elif reply == QMessageBox.Discard:
-                        proceed_with_close = True # Discard changes, proceed to close
+        #         if is_dirty: # Commented out for web view
+        #             # Prompt for this specific tab # Commented out for web view
+        #             tab_name = self.tab_widget.tabText(index_to_close) if hasattr(self, 'tab_widget') else "File" # Commented out for web view
+        #             reply = QMessageBox.question(self, f"Unsaved Changes - {tab_name}", # Commented out for web view
+        #                                          f"'{tab_name}' has unsaved changes. Save before closing?", # Commented out for web view
+        #                                          QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, # Commented out for web view
+        #                                          QMessageBox.Save) # Commented out for web view
+        #             if reply == QMessageBox.Cancel: # Commented out for web view
+        #                 proceed_with_close = False # Commented out for web view
+        #             elif reply == QMessageBox.Save: # Commented out for web view
+        #                 if not self._save_file(index_to_close): # Attempt to save # Commented out for web view
+        #                     # User cancelled the save dialog # Commented out for web view
+        #                     proceed_with_close = False # Commented out for web view
+        #             elif reply == QMessageBox.Discard: # Commented out for web view
+        #                 proceed_with_close = True # Discard changes, proceed to close # Commented out for web view
 
-            if not proceed_with_close:
-                return # Stop the tab closing process
+        #     if not proceed_with_close: # Commented out for web view
+        #         return # Stop the tab closing process # Commented out for web view
 
-            # If we are here, either file was not dirty, or user chose Discard, or Save was successful.
-            if path_for_editor:
-                if widget in self.editor_to_path:
-                    del self.editor_to_path[widget]
-                if path_for_editor in self.path_to_editor:
-                    del self.path_to_editor[path_for_editor]
+        #     # If we are here, either file was not dirty, or user chose Discard, or Save was successful. # Commented out for web view
+        #     if path_for_editor: # Commented out for web view
+        #         if widget in self.editor_to_path: # Commented out for web view
+        #             del self.editor_to_path[widget] # Commented out for web view
+        #         if path_for_editor in self.path_to_editor: # Commented out for web view
+        #             del self.path_to_editor[path_for_editor] # Commented out for web view
 
-                if not path_for_editor.startswith("untitled:"):
-                    self.file_manager.file_closed_in_editor(path_for_editor)
+        #         if not path_for_editor.startswith("untitled:"): # Commented out for web view
+        #             self.file_manager.file_closed_in_editor(path_for_editor) # Commented out for web view
             
-            widget.deleteLater()
+        #     widget.deleteLater() # Commented out for web view
         
-        self.tab_widget.removeTab(index_to_close)
+        # if hasattr(self, 'tab_widget'): # Commented out for web view
+        #    self.tab_widget.removeTab(index_to_close) # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
 
     def create_new_file(self):
@@ -1136,7 +1193,7 @@ class MainWindow(QMainWindow):
                 pass # Create an empty file
             
             # 4. Post-Creation Workflow
-            self.open_new_tab(full_path) # Open the new file in the editor
+            # self.open_new_tab(full_path) # Open the new file in the editor # Commented out for web view
             self.status_bar.showMessage(f"Created new file: {full_path}", 3000)
 
         except OSError as e:
@@ -1152,121 +1209,131 @@ class MainWindow(QMainWindow):
         file_dialog.setFileMode(QFileDialog.ExistingFile)
         if file_dialog.exec():
             selected_file = file_dialog.selectedFiles()[0]
-            self.initialize_project(selected_file) # Initialize project with the selected file
-            self.open_new_tab(selected_file)
+            # self.initialize_project(selected_file) # Initialize project with the selected file # Commented out for web view
+            # self.open_new_tab(selected_file) # Commented out for web view
+            pass # Functionality related to tab_widget commented out
+
 
     def save_current_file(self):
-        current_index = self.tab_widget.currentIndex()
-        if current_index == -1:
-            self.status_bar.showMessage("No active editor to save.")
-            return False
-        return self._save_file(current_index)
+        # current_index = self.tab_widget.currentIndex() if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        # if current_index == -1: # Commented out for web view
+        #     self.status_bar.showMessage("No active editor to save.") # Commented out for web view
+        #     return False # Commented out for web view
+        # return self._save_file(current_index) # Commented out for web view
+        return False # Functionality related to tab_widget commented out
+
 
     def save_current_file_as(self):
-        current_index = self.tab_widget.currentIndex()
-        if current_index == -1:
-            self.status_bar.showMessage("No active editor to save.")
-            return False
-        return self._save_file(current_index, save_as=True)
+        # current_index = self.tab_widget.currentIndex() if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        # if current_index == -1: # Commented out for web view
+        #     self.status_bar.showMessage("No active editor to save.") # Commented out for web view
+        #     return False # Commented out for web view
+        # return self._save_file(current_index, save_as=True) # Commented out for web view
+        return False # Functionality related to tab_widget commented out
+
 
     def _save_file(self, index: int, save_as: bool = False) -> bool:
-        editor = self.tab_widget.widget(index)
-        if not isinstance(editor, CodeEditor):
-            return False
+        # editor = self.tab_widget.widget(index) if hasattr(self, 'tab_widget') else None # Commented out for web view
+        # if not isinstance(editor, CodeEditor): # Commented out for web view
+        #     return False # Commented out for web view
 
-        current_path_placeholder = self.editor_to_path.get(editor)
-        content_to_save = editor.toPlainText()
-        path_to_save = None
+        # current_path_placeholder = self.editor_to_path.get(editor) # Commented out for web view
+        # content_to_save = editor.toPlainText() # Commented out for web view
+        # path_to_save = None # Commented out for web view
 
-        is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:")
+        # is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:") # Commented out for web view
 
-        if save_as or is_untitled_file:
-            suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-            suggested_filename_base = "Untitled.py"
-            if not is_untitled_file and current_path_placeholder:
-                suggested_dir = os.path.dirname(current_path_placeholder)
-                suggested_filename_base = os.path.basename(current_path_placeholder)
-            elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name
-                 suggested_filename_base = os.path.basename(current_path_placeholder)
+        # if save_as or is_untitled_file: # Commented out for web view
+        #     suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation) # Commented out for web view
+        #     suggested_filename_base = "Untitled.py" # Commented out for web view
+        #     if not is_untitled_file and current_path_placeholder: # Commented out for web view
+        #         suggested_dir = os.path.dirname(current_path_placeholder) # Commented out for web view
+        #         suggested_filename_base = os.path.basename(current_path_placeholder) # Commented out for web view
+        #     elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name # Commented out for web view
+        #          suggested_filename_base = os.path.basename(current_path_placeholder) # Commented out for web view
 
 
-            full_suggested_path = os.path.join(suggested_dir, suggested_filename_base)
+        #     full_suggested_path = os.path.join(suggested_dir, suggested_filename_base) # Commented out for web view
 
-            new_path_tuple = QFileDialog.getSaveFileName(
-                self, "Save File As", full_suggested_path,
-                "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)"
-            )
-            new_path = new_path_tuple[0]
+        #     new_path_tuple = QFileDialog.getSaveFileName( # Commented out for web view
+        #         self, "Save File As", full_suggested_path, # Commented out for web view
+        #         "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)" # Commented out for web view
+        #     ) # Commented out for web view
+        #     new_path = new_path_tuple[0] # Commented out for web view
 
-            if not new_path:
-                self.status_bar.showMessage("Save operation cancelled.", 3000)
-                return False
-            path_to_save = new_path
-        else:
-            path_to_save = current_path_placeholder
+        #     if not new_path: # Commented out for web view
+        #         self.status_bar.showMessage("Save operation cancelled.", 3000) # Commented out for web view
+        #         return False # Commented out for web view
+        #     path_to_save = new_path # Commented out for web view
+        # else: # Commented out for web view
+        #     path_to_save = current_path_placeholder # Commented out for web view
 
-        if not path_to_save:
-             QMessageBox.critical(self, "Save Error", "No file path determined for saving.")
-             return False
+        # if not path_to_save: # Commented out for web view
+        #      QMessageBox.critical(self, "Save Error", "No file path determined for saving.") # Commented out for web view
+        #      return False # Commented out for web view
 
-        if path_to_save.lower().endswith(".py"):
-            try:
-                formatted_content = black.format_str(content_to_save, mode=black.FileMode())
-                if formatted_content != content_to_save:
-                    self.is_updating_from_network = True
-                    current_cursor_pos = editor.textCursor().position()
-                    editor.setPlainText(formatted_content)
-                    new_cursor = editor.textCursor()
-                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_content)))
-                    editor.setTextCursor(new_cursor)
-                    self.is_updating_from_network = False
-                    content_to_save = formatted_content
-            except black.parsing.LibCSTError as e:
-                QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
-                return False
-            except Exception as e:
-                print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}")
+        # if path_to_save.lower().endswith(".py"): # Commented out for web view
+        #     try: # Commented out for web view
+        #         formatted_content = black.format_str(content_to_save, mode=black.FileMode()) # Commented out for web view
+        #         if formatted_content != content_to_save: # Commented out for web view
+        #             self.is_updating_from_network = True # Commented out for web view
+        #             current_cursor_pos = editor.textCursor().position() # Commented out for web view
+        #             editor.setPlainText(formatted_content) # Commented out for web view
+        #             new_cursor = editor.textCursor() # Commented out for web view
+        #             new_cursor.setPosition(min(current_cursor_pos, len(formatted_content))) # Commented out for web view
+        #             editor.setTextCursor(new_cursor) # Commented out for web view
+        #             self.is_updating_from_network = False # Commented out for web view
+        #             content_to_save = formatted_content # Commented out for web view
+        #     except black.parsing.LibCSTError as e: # Commented out for web view
+        #         QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}") # Commented out for web view
+        #         return False # Commented out for web view
+        #     except Exception as e: # Commented out for web view
+        #         print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}") # Commented out for web view
         
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.file_manager.save_file(editor, content_to_save, path_to_save)
-        QApplication.restoreOverrideCursor()
-        return True
+        # QApplication.setOverrideCursor(Qt.WaitCursor) # Commented out for web view
+        # self.file_manager.save_file(editor, content_to_save, path_to_save) # Commented out for web view
+        # QApplication.restoreOverrideCursor() # Commented out for web view
+        # return True # Commented out for web view
+        return False # Functionality related to tab_widget commented out
+
 
     @Slot(object, str, str) # widget_ref (editor), saved_path, saved_content
     def _handle_file_saved(self, editor_widget, saved_path, saved_content):
-        if editor_widget not in self.editor_to_path:
-            print(f"Warning: _handle_file_saved received widget_ref not in editor_to_path map.")
-            # This could happen if a new untitled file was saved.
-            # Or if the editor_widget reference passed by FileManager isn't the one we have.
-            # Assuming editor_widget is the correct CodeEditor instance passed to save_file.
+        # if editor_widget not in self.editor_to_path: # Commented out for web view
+        #     print(f"Warning: _handle_file_saved received widget_ref not in editor_to_path map.") # Commented out for web view
+            # This could happen if a new untitled file was saved. # Commented out for web view
+            # Or if the editor_widget reference passed by FileManager isn't the one we have. # Commented out for web view
+            # Assuming editor_widget is the correct CodeEditor instance passed to save_file. # Commented out for web view
 
-        old_path = self.editor_to_path.get(editor_widget)
+        # old_path = self.editor_to_path.get(editor_widget) # Commented out for web view
 
-        if old_path and old_path != saved_path:
-            # File was saved under a new name (Save As) or untitled file saved first time
-            if old_path in self.path_to_editor:
-                del self.path_to_editor[old_path]
+        # if old_path and old_path != saved_path: # Commented out for web view
+        #     # File was saved under a new name (Save As) or untitled file saved first time # Commented out for web view
+        #     if old_path in self.path_to_editor: # Commented out for web view
+        #         del self.path_to_editor[old_path] # Commented out for web view
         
-        self.editor_to_path[editor_widget] = saved_path
-        self.path_to_editor[saved_path] = editor_widget
-        # Update the editor's internal file_path attribute as well
-        if isinstance(editor_widget, CodeEditor):
-            editor_widget.file_path = saved_path
+        # self.editor_to_path[editor_widget] = saved_path # Commented out for web view
+        # self.path_to_editor[saved_path] = editor_widget # Commented out for web view
+        # # Update the editor's internal file_path attribute as well # Commented out for web view
+        # if isinstance(editor_widget, CodeEditor): # Commented out for web view
+        #     editor_widget.file_path = saved_path # Commented out for web view
 
 
-        tab_index = self.tab_widget.indexOf(editor_widget)
-        if tab_index != -1:
-            self.tab_widget.setTabText(tab_index, os.path.basename(saved_path))
-            self.tab_widget.setTabToolTip(tab_index, saved_path)
-            # The dirty status update (removing '*') is handled by _handle_dirty_status_changed
-            # which is triggered by FileManager's dirty_status_changed signal.
+        # tab_index = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        # if tab_index != -1: # Commented out for web view
+        #     self.tab_widget.setTabText(tab_index, os.path.basename(saved_path)) # Commented out for web view
+        #     self.tab_widget.setTabToolTip(tab_index, saved_path) # Commented out for web view
+            # The dirty status update (removing '*') is handled by _handle_dirty_status_changed # Commented out for web view
+            # which is triggered by FileManager's dirty_status_changed signal. # Commented out for web view
 
-        # Content in editor should already be what was saved, as formatting happens in _save_file before calling fm.save_file.
-        # If black formatting changed content, editor was updated then.
+        # Content in editor should already be what was saved, as formatting happens in _save_file before calling fm.save_file. # Commented out for web view
+        # If black formatting changed content, editor was updated then. # Commented out for web view
 
-        self.status_bar.showMessage(f"File '{os.path.basename(saved_path)}' saved successfully.", 3000)
-        if hasattr(self, 'file_explorer') and self.file_explorer:
-             self.file_explorer.refresh_tree() # Refresh file explorer to show new file or rename
+        # self.status_bar.showMessage(f"File '{os.path.basename(saved_path)}' saved successfully.", 3000) # Commented out for web view
+        # if hasattr(self, 'file_explorer') and self.file_explorer: # Commented out for web view
+        #      self.file_explorer.refresh_tree() # Refresh file explorer to show new file or rename # Commented out for web view
+        pass # Functionality related to tab_widget commented out
+
 
     @Slot(object, str, str) # widget_ref, path_attempted, error_message
     def _handle_file_save_error(self, widget_ref, path_attempted, error_message):
@@ -1274,105 +1341,107 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Save error for {path_attempted}", 5000)
 
     def format_current_code(self):
-        current_editor = self._get_current_code_editor()
-        if not current_editor:
-            self.status_bar.showMessage("No active editor to format.")
-            return
+        # current_editor = self._get_current_code_editor() # Commented out for web view
+        # if not current_editor: # Commented out for web view
+        #     self.status_bar.showMessage("No active editor to format.") # Commented out for web view
+        #     return # Commented out for web view
 
-        path = self.editor_to_path.get(current_editor)
-        if not path or path.startswith("untitled:"):
-            self.status_bar.showMessage("Formatting requires a saved Python file.")
-            return
+        # path = self.editor_to_path.get(current_editor) # Commented out for web view
+        # if not path or path.startswith("untitled:"): # Commented out for web view
+        #     self.status_bar.showMessage("Formatting requires a saved Python file.") # Commented out for web view
+        #     return # Commented out for web view
 
-        if path.lower().endswith(".py"):
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.status_bar.showMessage("Formatting code...")
-            original_text = current_editor.toPlainText()
-            try:
-                formatted_text = black.format_str(original_text, mode=black.FileMode())
-                if original_text != formatted_text:
-                    self.is_updating_from_network = True
-                    current_cursor_pos = current_editor.textCursor().position()
-                    current_editor.setPlainText(formatted_text)
-                    new_cursor = current_editor.textCursor()
-                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_text)))
-                    current_editor.setTextCursor(new_cursor)
-                    self.is_updating_from_network = False
-                    self.file_manager.update_file_content_changed(path, formatted_text)
-                self.status_bar.showMessage("Code formatted.")
-            except black.parsing.LibCSTError as e:
-                self.status_bar.showMessage("Formatting failed: Syntax error.")
-                QMessageBox.critical(self, "Formatting Error", f"Syntax error in code. Cannot format:\n{e}")
-            except Exception as e:
-                self.status_bar.showMessage("Formatting failed.")
-                QMessageBox.critical(self, "Formatting Error", f"Failed to format code with Black:\n{e}")
-            finally:
-                QApplication.restoreOverrideCursor()
-        else:
-            self.status_bar.showMessage("Formatting is only supported for Python files (.py).")
+        # if path.lower().endswith(".py"): # Commented out for web view
+        #     QApplication.setOverrideCursor(Qt.WaitCursor) # Commented out for web view
+        #     self.status_bar.showMessage("Formatting code...") # Commented out for web view
+        #     original_text = current_editor.toPlainText() # Commented out for web view
+        #     try: # Commented out for web view
+        #         formatted_text = black.format_str(original_text, mode=black.FileMode()) # Commented out for web view
+        #         if original_text != formatted_text: # Commented out for web view
+        #             self.is_updating_from_network = True # Commented out for web view
+        #             current_cursor_pos = current_editor.textCursor().position() # Commented out for web view
+        #             current_editor.setPlainText(formatted_text) # Commented out for web view
+        #             new_cursor = current_editor.textCursor() # Commented out for web view
+        #             new_cursor.setPosition(min(current_cursor_pos, len(formatted_text))) # Commented out for web view
+        #             current_editor.setTextCursor(new_cursor) # Commented out for web view
+        #             self.is_updating_from_network = False # Commented out for web view
+        #             self.file_manager.update_file_content_changed(path, formatted_text) # Commented out for web view
+        #         self.status_bar.showMessage("Code formatted.") # Commented out for web view
+        #     except black.parsing.LibCSTError as e: # Commented out for web view
+        #         self.status_bar.showMessage("Formatting failed: Syntax error.") # Commented out for web view
+        #         QMessageBox.critical(self, "Formatting Error", f"Syntax error in code. Cannot format:\n{e}") # Commented out for web view
+        #     except Exception as e: # Commented out for web view
+        #         self.status_bar.showMessage("Formatting failed.") # Commented out for web view
+        #         QMessageBox.critical(self, "Formatting Error", f"Failed to format code with Black:\n{e}") # Commented out for web view
+        #     finally: # Commented out for web view
+        #         QApplication.restoreOverrideCursor() # Commented out for web view
+        # else: # Commented out for web view
+        #     self.status_bar.showMessage("Formatting is only supported for Python files (.py).") # Commented out for web view
+        pass # Functionality related to tab_widget commented out
 
     def _save_file(self, index: int, save_as: bool = False) -> bool:
-        editor = self.tab_widget.widget(index)
-        if not isinstance(editor, CodeEditor):
-            return False
+        # editor = self.tab_widget.widget(index) if hasattr(self, 'tab_widget') else None # Commented out for web view
+        # if not isinstance(editor, CodeEditor): # Commented out for web view
+        #     return False # Commented out for web view
 
-        current_path_placeholder = self.editor_to_path.get(editor)
-        content_to_save = editor.toPlainText()
-        path_to_save = None
+        # current_path_placeholder = self.editor_to_path.get(editor) # Commented out for web view
+        # content_to_save = editor.toPlainText() # Commented out for web view
+        # path_to_save = None # Commented out for web view
 
-        is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:")
+        # is_untitled_file = current_path_placeholder is not None and current_path_placeholder.startswith("untitled:") # Commented out for web view
 
-        if save_as or is_untitled_file:
-            suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-            suggested_filename_base = "Untitled.py"
-            if not is_untitled_file and current_path_placeholder:
-                suggested_dir = os.path.dirname(current_path_placeholder)
-                suggested_filename_base = os.path.basename(current_path_placeholder)
-            elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name
-                 suggested_filename_base = os.path.basename(current_path_placeholder)
+        # if save_as or is_untitled_file: # Commented out for web view
+        #     suggested_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation) # Commented out for web view
+        #     suggested_filename_base = "Untitled.py" # Commented out for web view
+        #     if not is_untitled_file and current_path_placeholder: # Commented out for web view
+        #         suggested_dir = os.path.dirname(current_path_placeholder) # Commented out for web view
+        #         suggested_filename_base = os.path.basename(current_path_placeholder) # Commented out for web view
+        #     elif is_untitled_file and current_path_placeholder: # Untitled file, use its "Untitled-N" name # Commented out for web view
+        #          suggested_filename_base = os.path.basename(current_path_placeholder) # Commented out for web view
 
 
-            full_suggested_path = os.path.join(suggested_dir, suggested_filename_base)
+        #     full_suggested_path = os.path.join(suggested_dir, suggested_filename_base) # Commented out for web view
             
-            new_path_tuple = QFileDialog.getSaveFileName(
-                self, "Save File As", full_suggested_path,
-                "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)"
-            )
-            new_path = new_path_tuple[0]
+        #     new_path_tuple = QFileDialog.getSaveFileName( # Commented out for web view
+        #         self, "Save File As", full_suggested_path, # Commented out for web view
+        #         "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)" # Commented out for web view
+        #     ) # Commented out for web view
+        #     new_path = new_path_tuple[0] # Commented out for web view
 
-            if not new_path:
-                self.status_bar.showMessage("Save operation cancelled.", 3000)
-                return False
-            path_to_save = new_path
-        else:
-            path_to_save = current_path_placeholder
+        #     if not new_path: # Commented out for web view
+        #         self.status_bar.showMessage("Save operation cancelled.", 3000) # Commented out for web view
+        #         return False # Commented out for web view
+        #     path_to_save = new_path # Commented out for web view
+        # else: # Commented out for web view
+        #     path_to_save = current_path_placeholder # Commented out for web view
 
-        if not path_to_save:
-             QMessageBox.critical(self, "Save Error", "No file path determined for saving.")
-             return False
+        # if not path_to_save: # Commented out for web view
+        #      QMessageBox.critical(self, "Save Error", "No file path determined for saving.") # Commented out for web view
+        #      return False # Commented out for web view
 
-        if path_to_save.lower().endswith(".py"):
-            try:
-                formatted_content = black.format_str(content_to_save, mode=black.FileMode())
-                if formatted_content != content_to_save:
-                    self.is_updating_from_network = True
-                    current_cursor_pos = editor.textCursor().position()
-                    editor.setPlainText(formatted_content)
-                    new_cursor = editor.textCursor()
-                    new_cursor.setPosition(min(current_cursor_pos, len(formatted_content)))
-                    editor.setTextCursor(new_cursor)
-                    self.is_updating_from_network = False
-                    content_to_save = formatted_content
-            except black.parsing.LibCSTError as e:
-                QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
-                return False
-            except Exception as e:
-                print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}")
+        # if path_to_save.lower().endswith(".py"): # Commented out for web view
+        #     try: # Commented out for web view
+        #         formatted_content = black.format_str(content_to_save, mode=black.FileMode()) # Commented out for web view
+        #         if formatted_content != content_to_save: # Commented out for web view
+        #             self.is_updating_from_network = True # Commented out for web view
+        #             current_cursor_pos = editor.textCursor().position() # Commented out for web view
+        #             editor.setPlainText(formatted_content) # Commented out for web view
+        #             new_cursor = editor.textCursor() # Commented out for web view
+        #             new_cursor.setPosition(min(current_cursor_pos, len(formatted_content))) # Commented out for web view
+        #             editor.setTextCursor(new_cursor) # Commented out for web view
+        #             self.is_updating_from_network = False # Commented out for web view
+        #             content_to_save = formatted_content # Commented out for web view
+        #     except black.parsing.LibCSTError as e: # Commented out for web view
+        #         QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}") # Commented out for web view
+        #         return False # Commented out for web view
+        #     except Exception as e: # Commented out for web view
+        #         print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}") # Commented out for web view
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.file_manager.save_file(editor, content_to_save, path_to_save)
-        QApplication.restoreOverrideCursor()
-        return True
+        # QApplication.setOverrideCursor(Qt.WaitCursor) # Commented out for web view
+        # self.file_manager.save_file(editor, content_to_save, path_to_save) # Commented out for web view
+        # QApplication.restoreOverrideCursor() # Commented out for web view
+        # return True # Commented out for web view
+        return False # Functionality related to tab_widget commented out
 
 
     def save_session(self):
@@ -1381,12 +1450,12 @@ class MainWindow(QMainWindow):
 
         open_files_data = self.file_manager.get_all_open_files_data()
 
-        current_editor_widget = self.tab_widget.currentWidget()
+        # current_editor_widget = self.tab_widget.currentWidget() if hasattr(self, 'tab_widget') else None # Commented out for web view
         active_file_path = None
-        if isinstance(current_editor_widget, CodeEditor):
-            active_file_path = self.editor_to_path.get(current_editor_widget)
-            if active_file_path and active_file_path.startswith("untitled:"):
-                active_file_path = None # Don't save placeholder as active path
+        # if isinstance(current_editor_widget, CodeEditor): # Commented out for web view
+        #     active_file_path = self.editor_to_path.get(current_editor_widget) # Commented out for web view
+        #     if active_file_path and active_file_path.startswith("untitled:"): # Commented out for web view
+        #         active_file_path = None # Don't save placeholder as active path # Commented out for web view
 
         root_path_to_save = None
         if hasattr(self.file_explorer, 'model') and self.file_explorer.model is not None:
@@ -1408,7 +1477,7 @@ class MainWindow(QMainWindow):
 
     @Slot(dict) # session_data
     def _handle_session_loaded(self, session_data):
-        # print(f"MainWindow: _handle_session_loaded received: {session_data}")
+        # print(f"MainWindow: _handle_session_loaded received: {session_data}") # Commented out for web view
         self.recent_projects = session_data.get("recent_projects", [])
         self._update_recent_menu()
 
@@ -1417,18 +1486,22 @@ class MainWindow(QMainWindow):
         active_file_path_to_restore = session_data.get("active_file_path") # Changed from active_file_index
 
         # Restore FileManager's state with data from session
-        self.file_manager.load_open_files_data(open_files_data_from_session)
+        if hasattr(self, 'file_manager'): # Check if file_manager exists
+            self.file_manager.load_open_files_data(open_files_data_from_session)
 
         # Initialize project if root_path is available from session
         # This should happen before trying to open files, to set up the file explorer context
         if root_path_from_session:
-            self.initialize_project(root_path_from_session, add_to_recents=False)
+            # self.initialize_project(root_path_from_session, add_to_recents=False) # Commented out for web view
+            pass # Functionality related to tab_widget commented out
+
 
         # Open files based on the restored data in FileManager
         paths_to_open = sorted(list(open_files_data_from_session.keys()))
         for path in paths_to_open:
             if os.path.exists(path):
-                self.file_manager.open_file(path) # This triggers _handle_file_opened
+                # self.file_manager.open_file(path) # This triggers _handle_file_opened # Commented out for web view
+                pass # Functionality related to tab_widget commented out
             else:
                 print(f"Warning: File path from session not found, skipping: {path}")
 
@@ -1442,30 +1515,34 @@ class MainWindow(QMainWindow):
                 if os.path.isfile(self.pending_initial_path):
                     # If initialize_project was not called for this root, call it
                     if not root_path_from_session or os.path.dirname(self.pending_initial_path) != root_path_from_session:
-                         self.initialize_project(self.pending_initial_path, add_to_recents=True) # add_to_recents might need adjustment
+                         # self.initialize_project(self.pending_initial_path, add_to_recents=True) # add_to_recents might need adjustment # Commented out for web view
+                         pass # Functionality related to tab_widget commented out
                     else: # Root path matches, just ensure file is open
-                        self.file_manager.open_file(self.pending_initial_path)
+                        # self.file_manager.open_file(self.pending_initial_path) # Commented out for web view
+                        pass # Functionality related to tab_widget commented out
+
                 elif os.path.isdir(self.pending_initial_path):
-                     self.initialize_project(self.pending_initial_path, add_to_recents=True)
+                     # self.initialize_project(self.pending_initial_path, add_to_recents=True) # Commented out for web view
+                     pass # Functionality related to tab_widget commented out
             self.pending_initial_path = None
 
 
         # Restore active tab - this needs to happen *after* all tabs are created
         # Use active_file_path_to_restore from session data
-        if active_file_path_to_restore and active_file_path_to_restore in self.path_to_editor:
-            editor_to_activate = self.path_to_editor[active_file_path_to_restore]
-            for i in range(self.tab_widget.count()):
-                if self.tab_widget.widget(i) == editor_to_activate:
-                    self.tab_widget.setCurrentIndex(i)
-                    break
-        elif self.tab_widget.count() > 0: # Default to first tab if active one not found or not specified
-            self.tab_widget.setCurrentIndex(0)
+        # if active_file_path_to_restore and active_file_path_to_restore in self.path_to_editor: # Commented out for web view
+        #     editor_to_activate = self.path_to_editor[active_file_path_to_restore] # Commented out for web view
+        #     for i in range(self.tab_widget.count()): # Commented out for web view
+        #         if self.tab_widget.widget(i) == editor_to_activate: # Commented out for web view
+        #             self.tab_widget.setCurrentIndex(i) # Commented out for web view
+        #             break # Commented out for web view
+        # elif hasattr(self, 'tab_widget') and self.tab_widget.count() > 0: # Default to first tab if active one not found or not specified # Commented out for web view
+        #     self.tab_widget.setCurrentIndex(0) # Commented out for web view
 
         self.status_bar.showMessage("Session loaded.", 2000)
 
     @Slot()
     def _handle_session_saved_confirmation(self):
-        # print("MainWindow: Session saved confirmation received.")
+        # print("MainWindow: Session saved confirmation received.") # Commented out for web view
         self.status_bar.showMessage("Session saved.", 2000)
 
     @Slot(str) # error_message
@@ -1488,24 +1565,26 @@ class MainWindow(QMainWindow):
             self.save_session() # Save updated recent projects
 
     def _show_welcome_page(self):
-        from welcome_screen import WelcomeScreen # Import here to avoid circular dependency
-        # Close existing welcome tab if open
-        for i in range(self.tab_widget.count()):
-            if isinstance(self.tab_widget.widget(i), WelcomeScreen):
-                self.tab_widget.removeTab(i)
-                break
+        # from welcome_screen import WelcomeScreen # Import here to avoid circular dependency # Commented out for web view
+        # # Close existing welcome tab if open # Commented out for web view
+        # for i in range(self.tab_widget.count()): # Commented out for web view
+        #     if isinstance(self.tab_widget.widget(i), WelcomeScreen): # Commented out for web view
+        #         self.tab_widget.removeTab(i) # Commented out for web view
+        #         break # Commented out for web view
 
-        self.welcome_page = WelcomeScreen(recent_projects=self.recent_projects)
-        self.welcome_page.path_selected.connect(self.initialize_project)
-        self.welcome_page.recent_projects_changed.connect(self._update_recent_projects_from_welcome)
-        self.welcome_page.clear_recents_requested.connect(self._perform_clear_recent_projects_logic)
-        self.welcome_page.rename_recent_requested.connect(self._rename_recent_project)
-        self.welcome_page.remove_recent_requested.connect(self._remove_recent_project)
+        # self.welcome_page = WelcomeScreen(recent_projects=self.recent_projects) # Commented out for web view
+        # self.welcome_page.path_selected.connect(self.initialize_project) # Commented out for web view
+        # self.welcome_page.recent_projects_changed.connect(self._update_recent_projects_from_welcome) # Commented out for web view
+        # self.welcome_page.clear_recents_requested.connect(self._perform_clear_recent_projects_logic) # Commented out for web view
+        # self.welcome_page.rename_recent_requested.connect(self._rename_recent_project) # Commented out for web view
+        # self.welcome_page.remove_recent_requested.connect(self._remove_recent_project) # Commented out for web view
 
-        index = self.tab_widget.addTab(self.welcome_page, "Welcome")
-        self.tab_widget.setCurrentIndex(index)
-        self.tab_widget.setTabEnabled(index, False) # Make welcome tab non-closable
-        self.tab_widget.setTabButton(index, QTabWidget.RightSide, None) # Remove close button
+        # index = self.tab_widget.addTab(self.welcome_page, "Welcome") # Commented out for web view
+        # self.tab_widget.setCurrentIndex(index) # Commented out for web view
+        # self.tab_widget.setTabEnabled(index, False) # Make welcome tab non-closable # Commented out for web view
+        # self.tab_widget.setTabButton(index, QTabWidget.RightSide, None) # Remove close button # Commented out for web view
+        pass # Functionality related to tab_widget commented out
+
 
     @Slot(list)
     def _update_recent_projects_from_welcome(self, updated_list):
@@ -1563,52 +1642,53 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         # Check for unsaved changes across all open, tracked files
-        dirty_files_to_save = []
-        for editor_widget, path in list(self.editor_to_path.items()): # Iterate over a copy
-            is_dirty = False
-            if path.startswith("untitled:"):
-                # Untitled files are considered dirty if they have content or just exist and are new
-                tab_idx = self.tab_widget.indexOf(editor_widget)
-                if tab_idx != -1 and self.tab_widget.tabText(tab_idx).endswith("*"): # Check the UI indicator
-                    is_dirty = True
-            elif path in self.file_manager.open_files_data: # Check tracked files via FileManager
-                is_dirty = self.file_manager.get_dirty_state(path)
+        # dirty_files_to_save = [] # Commented out for web view
+        # for editor_widget, path in list(self.editor_to_path.items()): # Iterate over a copy # Commented out for web view
+        #     is_dirty = False # Commented out for web view
+        #     if path.startswith("untitled:"): # Commented out for web view
+        #         # Untitled files are considered dirty if they have content or just exist and are new # Commented out for web view
+        #         tab_idx = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        #         if tab_idx != -1 and self.tab_widget.tabText(tab_idx).endswith("*"): # Check the UI indicator # Commented out for web view
+        #             is_dirty = True # Commented out for web view
+        #     elif path in self.file_manager.open_files_data: # Check tracked files via FileManager # Commented out for web view
+        #         is_dirty = self.file_manager.get_dirty_state(path) # Commented out for web view
 
-            if is_dirty:
-                dirty_files_to_save.append(editor_widget) # Store editor widget to find its index later
+        #     if is_dirty: # Commented out for web view
+        #         dirty_files_to_save.append(editor_widget) # Store editor widget to find its index later # Commented out for web view
 
-        if dirty_files_to_save:
-            reply = QMessageBox.question(self, "Unsaved Changes",
-                                         "You have unsaved changes. Do you want to save them before closing?",
-                                         QMessageBox.SaveAll | QMessageBox.Discard | QMessageBox.Cancel,
-                                         QMessageBox.SaveAll) # Default to SaveAll
+        # if dirty_files_to_save: # Commented out for web view
+        #     reply = QMessageBox.question(self, "Unsaved Changes", # Commented out for web view
+        #                                  "You have unsaved changes. Do you want to save them before closing?", # Commented out for web view
+        #                                  QMessageBox.SaveAll | QMessageBox.Discard | QMessageBox.Cancel, # Commented out for web view
+        #                                  QMessageBox.SaveAll) # Default to SaveAll # Commented out for web view
 
-            if reply == QMessageBox.Cancel:
-                event.ignore()
-                return
-            elif reply == QMessageBox.SaveAll:
-                all_saved_successfully = True
-                for editor_widget in dirty_files_to_save:
-                    idx = self.tab_widget.indexOf(editor_widget)
-                    if idx != -1:
-                        # self.tab_widget.setCurrentIndex(idx) # Ensure tab is current for _save_file context
-                        if not self._save_file(idx): # Attempt to save
-                            all_saved_successfully = False
-                            # If a save is cancelled by user, _save_file returns False.
-                            # We should then ignore the close event.
-                            QMessageBox.warning(self, "Save Cancelled",
-                                                f"Save operation was cancelled for '{self.tab_widget.tabText(idx)}'. Closing aborted.")
-                            event.ignore()
-                            return
-                if not all_saved_successfully: # Should be caught by return above, but as safeguard
-                    event.ignore()
-                    return
-            elif reply == QMessageBox.Discard:
-                # User chose to discard changes, proceed to close.
-                pass
+        #     if reply == QMessageBox.Cancel: # Commented out for web view
+        #         event.ignore() # Commented out for web view
+        #         return # Commented out for web view
+        #     elif reply == QMessageBox.SaveAll: # Commented out for web view
+        #         all_saved_successfully = True # Commented out for web view
+        #         for editor_widget in dirty_files_to_save: # Commented out for web view
+        #             idx = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+        #             if idx != -1: # Commented out for web view
+        #                 # self.tab_widget.setCurrentIndex(idx) # Ensure tab is current for _save_file context # Commented out for web view
+        #                 if not self._save_file(idx): # Attempt to save # Commented out for web view
+        #                     all_saved_successfully = False # Commented out for web view
+        #                     # If a save is cancelled by user, _save_file returns False. # Commented out for web view
+        #                     # We should then ignore the close event. # Commented out for web view
+        #                     QMessageBox.warning(self, "Save Cancelled", # Commented out for web view
+        #                                         f"Save operation was cancelled for '{self.tab_widget.tabText(idx) if hasattr(self, 'tab_widget') else 'File'}'. Closing aborted.") # Commented out for web view
+        #                     event.ignore() # Commented out for web view
+        #                     return # Commented out for web view
+        #         if not all_saved_successfully: # Should be caught by return above, but as safeguard # Commented out for web view
+        #             event.ignore() # Commented out for web view
+        #             return # Commented out for web view
+        #     elif reply == QMessageBox.Discard: # Commented out for web view
+        #         # User chose to discard changes, proceed to close. # Commented out for web view
+        #         pass # Commented out for web view
         
         # If all checks pass (no dirty files, or user chose Discard, or all saves succeeded):
-        self.save_session() # Save session state (open files list, etc.)
+        if hasattr(self, 'session_manager'): # Check if session_manager exists
+            self.save_session() # Save session state (open files list, etc.)
         event.accept() # Allow window to close
 
     @Slot(QPoint)
@@ -1633,11 +1713,12 @@ class MainWindow(QMainWindow):
 
     def _find_editor_for_path(self, file_path):
         """Helper to find an open CodeEditor tab for a given file path."""
-        for i in range(self.tab_widget.count()):
-            editor = self.tab_widget.widget(i)
-            if isinstance(editor, CodeEditor) and editor.file_path == file_path:
-                return editor, i
-        return None, -1
+        # for i in range(self.tab_widget.count()): # Commented out for web view
+        #     editor = self.tab_widget.widget(i) # Commented out for web view
+        #     if isinstance(editor, CodeEditor) and editor.file_path == file_path: # Commented out for web view
+        #         return editor, i # Commented out for web view
+        return None, -1 # Commented out for web view
+
 
     def _rename_file_folder(self, index):
         model = self.file_explorer.model
@@ -1662,22 +1743,22 @@ class MainWindow(QMainWindow):
 
         try:
             # Inform FileManager first if the path is tracked
-            if old_path in self.path_to_editor: # Check if it's an open tab
-                editor_widget = self.path_to_editor[old_path] # Get the editor widget
-                self.file_manager.rename_path_tracking(old_path, new_path)
+            # if old_path in self.path_to_editor: # Check if it's an open tab # Commented out for web view
+            #     editor_widget = self.path_to_editor[old_path] # Get the editor widget # Commented out for web view
+            #     self.file_manager.rename_path_tracking(old_path, new_path) # Commented out for web view
 
-                # Update MainWindow's own mappings and UI
-                # Remove old path entry, add new path entry for the same editor widget
-                self.path_to_editor.pop(old_path)
-                self.path_to_editor[new_path] = editor_widget
-                self.editor_to_path[editor_widget] = new_path # Update reverse mapping
+            #     # Update MainWindow's own mappings and UI # Commented out for web view
+            #     # Remove old path entry, add new path entry for the same editor widget # Commented out for web view
+            #     self.path_to_editor.pop(old_path) # Commented out for web view
+            #     self.path_to_editor[new_path] = editor_widget # Commented out for web view
+            #     self.editor_to_path[editor_widget] = new_path # Update reverse mapping # Commented out for web view
 
-                editor_widget.file_path = new_path # Update editor's internal file_path attribute
+            #     editor_widget.file_path = new_path # Update editor's internal file_path attribute # Commented out for web view
 
-                tab_idx = self.tab_widget.indexOf(editor_widget)
-                if tab_idx != -1:
-                    self.tab_widget.setTabText(tab_idx, os.path.basename(new_path))
-                    self.tab_widget.setTabToolTip(tab_idx, new_path)
+            #     tab_idx = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+            #     if tab_idx != -1: # Commented out for web view
+            #         self.tab_widget.setTabText(tab_idx, os.path.basename(new_path)) # Commented out for web view
+            #         self.tab_widget.setTabToolTip(tab_idx, new_path) # Commented out for web view
 
             os.rename(old_path, new_path)
             self.status_bar.showMessage(f"Renamed to {os.path.basename(new_path)}")
@@ -1691,19 +1772,22 @@ class MainWindow(QMainWindow):
     def _handle_process_output(self, output_str):
         if hasattr(self, 'terminal_widget') and self.terminal_widget:
             self.terminal_widget.append_output(output_str)
-            self.terminal_dock.show()
+            if hasattr(self, 'terminal_dock'): # Check if terminal_dock exists
+                self.terminal_dock.show()
         else:
             print(f"Process Output (no terminal_widget): {output_str}")
 
     @Slot()
     def _handle_process_started(self):
         self.status_bar.showMessage("Process started...")
-        if hasattr(self, 'run_debug_action_button'):
-            self.run_debug_action_button.setEnabled(False)
+        if hasattr(self, 'run_action_button'): # Changed from run_debug_action_button
+            self.run_action_button.setEnabled(False)
         if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
             self.terminal_widget.clear_output()
-            self.terminal_dock.show()
-            self.terminal_dock.raise_()
+            if hasattr(self, 'terminal_dock'): # Check if terminal_dock exists
+                self.terminal_dock.show()
+                self.terminal_dock.raise_()
+
 
     @Slot(int, QProcess.ExitStatus)
     def _handle_process_finished(self, exit_code, exit_status):
@@ -1712,8 +1796,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message, 5000)
         if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
             self.terminal_widget.append_output(f"\n--- {message} ---\n")
-        if hasattr(self, 'run_debug_action_button'):
-            self.run_debug_action_button.setEnabled(True)
+        if hasattr(self, 'run_action_button'): # Changed from run_debug_action_button
+            self.run_action_button.setEnabled(True)
+
 
     @Slot(str)
     def _handle_process_error(self, error_message):
@@ -1722,8 +1807,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(full_error_message, 5000)
         if hasattr(self, 'terminal_widget') and self.terminal_widget: # Check added
             self.terminal_widget.append_output(f"\n--- ERROR: {error_message} ---\n")
-        if hasattr(self, 'run_debug_action_button'):
-            self.run_debug_action_button.setEnabled(True)
+        if hasattr(self, 'run_action_button'): # Changed from run_debug_action_button
+            self.run_action_button.setEnabled(True)
+
 
     def _delete_file_folder(self, index):
         path_to_delete = self.file_explorer.model.filePath(index)
@@ -1736,23 +1822,23 @@ class MainWindow(QMainWindow):
             try:
                 # If path_to_delete is an open tab, close it first.
                 # This needs to handle directories as well: close all tabs for files within the directory.
-                tabs_to_close_indices = []
-                if os.path.isdir(path_to_delete):
-                    for editor_widget, open_path in list(self.editor_to_path.items()): # Iterate over a copy for modification
-                        if open_path.startswith(path_to_delete + os.sep):
-                            tab_idx = self.tab_widget.indexOf(editor_widget)
-                            if tab_idx != -1:
-                                tabs_to_close_indices.append(tab_idx)
-                elif os.path.isfile(path_to_delete):
-                    if path_to_delete in self.path_to_editor:
-                        editor_widget = self.path_to_editor[path_to_delete]
-                        tab_idx = self.tab_widget.indexOf(editor_widget)
-                        if tab_idx != -1:
-                            tabs_to_close_indices.append(tab_idx)
+                # tabs_to_close_indices = [] # Commented out for web view
+                # if os.path.isdir(path_to_delete): # Commented out for web view
+                #     for editor_widget, open_path in list(self.editor_to_path.items()): # Iterate over a copy for modification # Commented out for web view
+                #         if open_path.startswith(path_to_delete + os.sep): # Commented out for web view
+                #             tab_idx = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+                #             if tab_idx != -1: # Commented out for web view
+                #                 tabs_to_close_indices.append(tab_idx) # Commented out for web view
+                # elif os.path.isfile(path_to_delete): # Commented out for web view
+                #     if path_to_delete in self.path_to_editor: # Commented out for web view
+                #         editor_widget = self.path_to_editor[path_to_delete] # Commented out for web view
+                #         tab_idx = self.tab_widget.indexOf(editor_widget) if hasattr(self, 'tab_widget') else -1 # Commented out for web view
+                #         if tab_idx != -1: # Commented out for web view
+                #             tabs_to_close_indices.append(tab_idx) # Commented out for web view
                 
-                # Close tabs in reverse order to avoid index issues
-                for tab_idx in sorted(list(set(tabs_to_close_indices)), reverse=True): # Ensure unique indices
-                    self.close_tab(tab_idx) # close_tab should handle FM.file_closed_in_editor
+                # # Close tabs in reverse order to avoid index issues # Commented out for web view
+                # for tab_idx in sorted(list(set(tabs_to_close_indices)), reverse=True): # Ensure unique indices # Commented out for web view
+                #     self.close_tab(tab_idx) # close_tab should handle FM.file_closed_in_editor # Commented out for web view
 
                 # Now perform the actual deletion from the file system
                 if os.path.isdir(path_to_delete):

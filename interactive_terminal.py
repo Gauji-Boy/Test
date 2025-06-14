@@ -73,7 +73,7 @@ class InteractiveTerminal(QWidget):
                 padding: 5px;
             }
         """)
-        font = QFont("Consolas", 10)
+        font = QFont("Fira Code", 11) # Consistent font size with code editor
         self.output_display.setFont(font)
         self.output_display.setReadOnly(False) # Shell input is through this
 
