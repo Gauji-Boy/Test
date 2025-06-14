@@ -61,13 +61,13 @@ class MainWindow(QMainWindow):
         self._setup_toolbars()
         self._setup_menus()
         self._setup_docks()
+        self._update_network_ui_state() # Moved here
 
         self._connect_manager_signals()
 
         self.pending_initial_path = initial_path
         self.session_manager.load_session_data()
         self.setObjectName("MainWindow")
-        self._update_network_ui_state()
 
     def _setup_central_widget(self):
         self.tab_widget = QTabWidget()
@@ -141,7 +141,6 @@ class MainWindow(QMainWindow):
         self.stop_debug_session_action.triggered.connect(self._on_dbg_stop_session)
         self.debugger_toolbar.addAction(self.stop_debug_session_action)
 
-        self._update_network_ui_state()
 
 
     def _setup_menus(self):
@@ -595,7 +594,7 @@ class MainWindow(QMainWindow):
         current_editor = self._get_current_editor()
         if current_editor:
             if not self.is_updating_from_network:
-                current_editor.document().setModified(True)
+                current_editor.set_modified(True)
                 if self.network_manager.is_connected() and self.has_control:
                     path = self._get_current_file_path()
                     if path:
@@ -635,8 +634,8 @@ class MainWindow(QMainWindow):
             except RuntimeError: pass
             self.undo_action.triggered.connect(current_editor.undo)
             self.redo_action.triggered.connect(current_editor.redo)
-            self.undo_action.setEnabled(current_editor.get_undo_stack().canUndo())
-            self.redo_action.setEnabled(current_editor.get_undo_stack().canRedo())
+            self.undo_action.setEnabled(current_editor.text_edit.document().isUndoAvailable())
+            self.redo_action.setEnabled(current_editor.text_edit.document().isRedoAvailable())
             current_editor.ensure_cursor_visible()
         else:
             self._clear_status_bar_file_specifics()
@@ -1251,4 +1250,3 @@ class MainWindow(QMainWindow):
 #     window.show()
 #     sys.exit(app.exec())
 
-[end of main_window.py]

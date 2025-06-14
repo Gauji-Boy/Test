@@ -62,8 +62,16 @@ class SessionManager(QObject):
             if not os.path.exists(session_dir):
                 os.makedirs(session_dir, exist_ok=True)
 
+            # Convert sets to lists for JSON serialization
+            serializable_data = {}
+            for key, value in data_dict.items():
+                if isinstance(value, set):
+                    serializable_data[key] = list(value)
+                else:
+                    serializable_data[key] = value
+
             with open(self.session_file_path, 'w', encoding='utf-8') as f:
-                json.dump(data_dict, f, indent=4)
+                json.dump(serializable_data, f, indent=4)
             self.session_data_saved.emit()
             print(f"SessionManager: Session data saved to '{self.session_file_path}'")
         except Exception as e:
@@ -87,6 +95,11 @@ class SessionManager(QObject):
         try:
             with open(self.session_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            
+            # Convert lists back to sets for specific keys if needed
+            if 'active_breakpoints' in data and isinstance(data['active_breakpoints'], list):
+                data['active_breakpoints'] = set(data['active_breakpoints'])
+
             self.session_data_loaded.emit(data)
             print(f"SessionManager: Session data loaded from '{self.session_file_path}'")
         except json.JSONDecodeError as jde:

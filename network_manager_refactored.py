@@ -10,6 +10,7 @@ class NetworkManagerRefactored(QObject):
     disconnected_from_peer = Signal()
     error_occurred = Signal(str) # General network errors
     status_message = Signal(str) # For user-facing status updates
+    output_received = Signal(str, str) # For logging network activity (category, message)
 
     # Signals for data exchange (collaborative editing)
     # For text content, cursor position, selection changes, etc.
