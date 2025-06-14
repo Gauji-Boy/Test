@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QComboBox
 )
 from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QFont, QKeySequence
-from PySide6.QtCore import Qt, Signal, Slot, QPoint, QStandardPaths, QSize, QByteArray
+from PySide6.QtCore import Qt, Signal, Slot, QPoint, QStandardPaths, QSize, QByteArray, QDir, QProcess
 
 # Import new manager classes
 from file_manager import FileManager
@@ -581,7 +581,7 @@ class MainWindow(QMainWindow):
 
     @Slot(int, "QProcess::ExitStatus") # Use string literal for QProcess types if QProcess not directly imported
     def _on_process_finished(self, exit_code: int, exit_status): # exit_status type hint might need adjustment
-        status_text = "successfully" if exit_status == QProcess.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
+        status_text = "successfully" if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
         msg = f"Process finished {status_text}."
         self.status_bar.showMessage(msg, 3000)
         if hasattr(self, 'terminal_widget') and self.terminal_widget:
