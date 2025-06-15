@@ -5,23 +5,22 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QTabWidget, QDockWidget, QToolBar, QPlainTextEdit, QTextEdit,
+    QTabWidget, QDockWidget, QToolBar, QPlainTextEdit,
     QListView, QMessageBox, QFileDialog, QTreeView
 )
 from PySide6.QtCore import Qt, QSize, QByteArray, QProcess, QStringListModel
-from PySide6.QtGui import QAction, QKeySequence, QTextCursor, QCloseEvent, QIcon, QStandardItemModel, QStandardItem
+from PySide6.QtGui import (
+    QAction, QKeySequence, QTextCursor, QCloseEvent,
+    QIcon, QStandardItemModel, QStandardItem
+)
 
+# Custom module imports
 from session_manager import SessionManager
 from file_manager_refactored import FileManager
 from process_manager_refactored import ProcessManager
 from interactive_terminal_refactored import InteractiveTerminal
 from debug_manager_refactored import DebugManager
-
-class CodeEditor(QTextEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFontFamily("monospace")
-        self.setTabStopDistance(4 * 8)
+from code_editor import CodeEditor # Import the external CodeEditor
 
 class MainWindow(QMainWindow):
     RUNNER_CONFIG = {
@@ -40,7 +39,6 @@ class MainWindow(QMainWindow):
         self._program_to_launch_after_dap_init = None
         self.breakpoints_map = {}
 
-
         self._define_actions()
 
         self.session_manager = SessionManager()
@@ -53,12 +51,10 @@ class MainWindow(QMainWindow):
         self._setup_connections()
 
         self.load_session()
-
         if not self.statusBar().currentMessage():
             self.statusBar().showMessage("Application initialized.", 3000)
 
     def _define_actions(self):
-        # File Actions
         self.new_file_action = QAction("&New", self)
         self.new_file_action.setShortcut(QKeySequence.StandardKey.New)
         self.new_file_action.setStatusTip("Create a new file")
@@ -80,51 +76,42 @@ class MainWindow(QMainWindow):
         self.quit_action.setStatusTip("Quit the application")
         self.quit_action.triggered.connect(QApplication.instance().quit)
 
-        # Run Action
         self.run_action = QAction("&Run", self)
         self.run_action.setShortcut(QKeySequence(Qt.Key.Key_F5))
         self.run_action.setStatusTip("Run the current file")
 
-        # Debug Actions
         self.start_debug_action = QAction("Start &Debugging", self)
         self.start_debug_action.setShortcut(QKeySequence(Qt.Key.Key_F6))
         self.start_debug_action.setStatusTip("Start a debug session for the current file")
-        # self.start_debug_action.setIcon(QIcon(":/icons/debug_start.png"))
 
         self.continue_action = QAction("&Continue", self)
         self.continue_action.setShortcut(QKeySequence(Qt.Key.Key_F8))
         self.continue_action.setStatusTip("Continue execution")
         self.continue_action.setEnabled(False)
-        # self.continue_action.setIcon(QIcon(":/icons/debug_continue.png"))
 
         self.step_over_action = QAction("Step &Over", self)
         self.step_over_action.setShortcut(QKeySequence(Qt.Key.Key_F10))
         self.step_over_action.setStatusTip("Step over the current line")
         self.step_over_action.setEnabled(False)
-        # self.step_over_action.setIcon(QIcon(":/icons/debug_step_over.png"))
 
         self.step_in_action = QAction("Step &In", self)
         self.step_in_action.setShortcut(QKeySequence(Qt.Key.Key_F11))
         self.step_in_action.setStatusTip("Step into the current function call")
         self.step_in_action.setEnabled(False)
-        # self.step_in_action.setIcon(QIcon(":/icons/debug_step_in.png"))
 
         self.step_out_action = QAction("Step O&ut", self)
         self.step_out_action.setShortcut(QKeySequence(Qt.Key.Key_ShiftModifier | Qt.Key.Key_F11))
         self.step_out_action.setStatusTip("Step out of the current function")
         self.step_out_action.setEnabled(False)
-        # self.step_out_action.setIcon(QIcon(":/icons/debug_step_out.png"))
 
         self.stop_debug_action = QAction("S&top Debugging", self)
         self.stop_debug_action.setShortcut(QKeySequence(Qt.Key.Key_ShiftModifier | Qt.Key.Key_F5))
         self.stop_debug_action.setStatusTip("Stop the current debug session")
         self.stop_debug_action.setEnabled(False)
-        # self.stop_debug_action.setIcon(QIcon(":/icons/debug_stop.png"))
 
         self.toggle_breakpoint_action = QAction("&Toggle Breakpoint", self)
         self.toggle_breakpoint_action.setShortcut(QKeySequence(Qt.Key.Key_F9))
         self.toggle_breakpoint_action.setStatusTip("Toggle a breakpoint on the current line")
-        # self.toggle_breakpoint_action.setIcon(QIcon(":/icons/debug_breakpoint.png"))
 
     def _setup_ui(self):
         self.tab_widget = QTabWidget()
@@ -190,7 +177,9 @@ class MainWindow(QMainWindow):
         self.variables_dock = QDockWidget("Variables", self)
         self.variables_dock.setObjectName("VariablesDockWidget")
         self.variables_view = QTreeView()
-        self.variables_view.setModel(QStandardItemModel())
+        model = QStandardItemModel()
+        model.setHorizontalHeaderLabels(["Name", "Value", "Type"])
+        self.variables_view.setModel(model)
         self.variables_dock.setWidget(self.variables_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
@@ -256,7 +245,6 @@ class MainWindow(QMainWindow):
         self.process_manager.process_finished.connect(self._on_process_finished)
         self.process_manager.process_error.connect(self._on_process_error)
 
-        # Debug connections
         self.start_debug_action.triggered.connect(self._on_start_debug_action)
         self.continue_action.triggered.connect(self._on_continue_action)
         self.step_over_action.triggered.connect(self._on_step_over_action)
@@ -278,6 +266,9 @@ class MainWindow(QMainWindow):
 
     def _on_new_file_action(self):
         editor = CodeEditor(self)
+        editor.textChanged.connect(lambda editor_instance=editor: self._on_editor_text_changed_generic(editor_instance))
+        if hasattr(editor, 'breakpoint_toggled'):
+             editor.breakpoint_toggled.connect(self._on_editor_breakpoint_toggled)
         tab_name = f"Untitled-{self.untitled_counter}"
         self.untitled_counter += 1
         tab_index = self.tab_widget.addTab(editor, tab_name)
@@ -324,11 +315,26 @@ class MainWindow(QMainWindow):
     def _on_file_content_loaded(self, path: str, content: str):
         for i in range(self.tab_widget.count()):
             editor_widget = self.tab_widget.widget(i)
-            if editor_widget and self.file_manager.get_file_path(editor_widget) == path:
+            if isinstance(editor_widget, CodeEditor) and self.file_manager.get_file_path(editor_widget) == path:
                 self.tab_widget.setCurrentIndex(i)
+                # Ensure signals are connected if editor was restored from session without connections
+                if hasattr(editor_widget, 'textChanged') and not self._is_signal_connected(editor_widget.textChanged, self._on_editor_text_changed_generic):
+                    editor_widget.textChanged.connect(lambda editor_instance=editor_widget: self._on_editor_text_changed_generic(editor_instance))
+                if hasattr(editor_widget, 'breakpoint_toggled') and not self._is_signal_connected(editor_widget.breakpoint_toggled, self._on_editor_breakpoint_toggled):
+                     editor_widget.breakpoint_toggled.connect(self._on_editor_breakpoint_toggled)
+                if hasattr(editor_widget, 'set_file_path_and_update_language'): # Update language for existing editor
+                    editor_widget.set_file_path_and_update_language(path)
                 return
+
         editor = CodeEditor(self)
-        editor.setText(content)
+        editor.setPlainText(content)
+        if hasattr(editor, 'set_file_path_and_update_language'):
+            editor.set_file_path_and_update_language(path)
+
+        editor.textChanged.connect(lambda editor_instance=editor: self._on_editor_text_changed_generic(editor_instance))
+        if hasattr(editor, 'breakpoint_toggled'):
+             editor.breakpoint_toggled.connect(self._on_editor_breakpoint_toggled)
+
         filename = Path(path).name
         tab_index = self.tab_widget.addTab(editor, filename)
         self.tab_widget.setCurrentIndex(tab_index)
@@ -336,14 +342,30 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Opened: {filename}", 3000)
         editor.setFocus()
 
-    def _on_file_saved(self, widget: QWidget, new_path: str):
-        tab_index = self.tab_widget.indexOf(widget)
-        if tab_index != -1:
-            filename = Path(new_path).name
-            self.tab_widget.setTabText(tab_index, filename)
-            self.statusBar().showMessage(f"Saved: {filename}", 3000)
+    def _on_file_saved(self, widget: QWidget, new_path: str, new_content: str):
+        if isinstance(widget, CodeEditor):
+            widget.blockSignals(True)
+            old_cursor_pos = widget.textCursor().position()
+            old_h_scroll = widget.horizontalScrollBar().value()
+            old_v_scroll = widget.verticalScrollBar().value()
+
+            widget.setPlainText(new_content)
+
+            new_cursor = widget.textCursor()
+            new_cursor.setPosition(min(old_cursor_pos, len(new_content)))
+            widget.setTextCursor(new_cursor)
+            widget.horizontalScrollBar().setValue(old_h_scroll)
+            widget.verticalScrollBar().setValue(old_v_scroll)
+
+            widget.blockSignals(False)
+
+            tab_index = self.tab_widget.indexOf(widget)
+            if tab_index != -1:
+                filename = Path(new_path).name
+                self.tab_widget.setTabText(tab_index, filename)
+                self.statusBar().showMessage(f"Saved: {filename}", 3000)
         else:
-            self.statusBar().showMessage(f"Error: Could not find tab for saved file {new_path}", 3000)
+            self.statusBar().showMessage(f"Error: Saved widget not a CodeEditor for {new_path}", 3000)
 
     def _on_file_manager_error(self, message: str):
         QMessageBox.critical(self, "File Operation Error", message)
@@ -417,6 +439,67 @@ class MainWindow(QMainWindow):
         if self.terminal:
             prefix = "\n" if self.terminal.display_area.toPlainText() and not self.terminal.display_area.toPlainText().endswith("\n") else ""
             self.terminal.display_area.appendPlainText(f"{prefix}[Process Error: {error_message}]\n"); self.terminal.display_area.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _on_editor_text_changed_generic(self, editor_instance):
+       if isinstance(editor_instance, CodeEditor):
+           self.file_manager.update_dirty_status(editor_instance, True)
+           tab_index = self.tab_widget.indexOf(editor_instance)
+           if tab_index != -1:
+               current_tab_text = self.tab_widget.tabText(tab_index)
+               if not current_tab_text.endswith("*"):
+                   self.tab_widget.setTabText(tab_index, current_tab_text + "*")
+
+    def _on_editor_breakpoint_toggled(self, line_number: int):
+        sender_widget = self.sender()
+        editor_widget = None
+        if isinstance(sender_widget, CodeEditor):
+            editor_widget = sender_widget
+        elif hasattr(sender_widget, 'parent') and isinstance(sender_widget.parent(), CodeEditor):
+            editor_widget = sender_widget.parent()
+
+        if not isinstance(editor_widget, CodeEditor):
+            current_tab_widget = self.tab_widget.currentWidget()
+            if isinstance(current_tab_widget, CodeEditor):
+                editor_widget = current_tab_widget
+            else:
+                self.statusBar().showMessage("Error identifying editor for breakpoint.", 3000)
+                return
+
+        if editor_widget:
+            file_path_str = self.file_manager.get_file_path(editor_widget)
+            if not file_path_str:
+                self.statusBar().showMessage("Save file to set breakpoints.", 2000)
+                return
+
+            file_bps = self.breakpoints_map.setdefault(file_path_str, {})
+            if line_number in file_bps:
+                del file_bps[line_number]
+                print(f"UI: Breakpoint removed at {file_path_str}:{line_number}")
+            else:
+                file_bps[line_number] = {'line': line_number}
+                print(f"UI: Breakpoint added at {file_path_str}:{line_number}")
+
+            if hasattr(editor_widget, 'gutter') and hasattr(editor_widget.gutter, 'update_breakpoints_display'):
+                 editor_widget.gutter.update_breakpoints_display(set(file_bps.keys()))
+
+            if hasattr(self, 'breakpoints_view') and self.breakpoints_view.model():
+                if isinstance(self.breakpoints_view.model(), QStringListModel):
+                    bp_list_str = []
+                    for f_path, lines_dict in self.breakpoints_map.items():
+                        for line_num_key in lines_dict:
+                            bp_list_str.append(f"{Path(f_path).name}:{line_num_key}")
+                    self.breakpoints_view.model().setStringList(bp_list_str)
+
+            if self.debug_manager and self.debug_manager.is_debugging:
+                dap_bps_for_file = list(file_bps.values())
+                self.debug_manager.dap_set_breakpoints(file_path_str, dap_bps_for_file)
+
+            self.statusBar().showMessage(f"Breakpoint toggled at {Path(file_path_str).name}:{line_number}.", 2000)
+        else:
+            print(f"Warning: _on_editor_breakpoint_toggled could not resolve CodeEditor instance. Sender: {self.sender()}")
+
+    def _is_signal_connected(self, signal_instance, slot_method):
+        return False
 
     def load_session(self):
         self.statusBar().showMessage("Loading session...", 0)
@@ -544,118 +627,13 @@ class MainWindow(QMainWindow):
 
     # --- Helper for UI State ---
     def _update_debug_action_states(self, is_debugging_active: bool, is_paused: bool = False):
-        """Helper to enable/disable debug actions based on state."""
         self.start_debug_action.setEnabled(not is_debugging_active)
         self.run_action.setEnabled(not is_debugging_active)
-
         self.stop_debug_action.setEnabled(is_debugging_active)
         self.continue_action.setEnabled(is_debugging_active and is_paused)
         self.step_over_action.setEnabled(is_debugging_active and is_paused)
         self.step_in_action.setEnabled(is_debugging_active and is_paused)
         self.step_out_action.setEnabled(is_debugging_active and is_paused)
-
-    # --- Slots for UI -> DebugManager ---
-    def _on_start_debug_action(self):
-        current_editor = self.tab_widget.currentWidget()
-        if not isinstance(current_editor, CodeEditor):
-            self.statusBar().showMessage("No active code editor to debug.", 3000)
-            return
-
-        file_path_str = self.file_manager.get_file_path(current_editor)
-        if not file_path_str:
-            QMessageBox.warning(self, "Cannot Debug", "Please save the file before starting a debug session.")
-            return
-
-        if self.debug_manager.is_debugging:
-            QMessageBox.information(self, "Debug Session Active", "A debug session is already active.")
-            return
-
-        dap_server_command = ["python", "-m", "debugpy.adapter", "--listen", "0"]
-        dap_working_dir = str(Path(file_path_str).parent)
-
-        self.statusBar().showMessage(f"Starting debug session for {Path(file_path_str).name}...", 0)
-        if hasattr(self, 'call_stack_view') and self.call_stack_view.model(): self.call_stack_view.model().setStringList([])
-        if hasattr(self, 'variables_view') and self.variables_view.model(): self.variables_view.model().removeRows(0, self.variables_view.model().rowCount())
-        if hasattr(self, 'breakpoints_view') and self.breakpoints_view.model():
-            if isinstance(self.breakpoints_view.model(), QStringListModel):
-                 self.breakpoints_view.model().setStringList([])
-
-        for dock_attr in ['call_stack_dock', 'variables_dock', 'watch_dock', 'breakpoints_dock', 'terminal_dock']:
-            dock = getattr(self, dock_attr, None)
-            if dock: dock.setVisible(True); dock.raise_()
-
-        self.debug_manager.start_dap_server(dap_server_command, dap_working_dir)
-        self._program_to_launch_after_dap_init = file_path_str
-
-    def _on_continue_action(self):
-        if self.debug_manager.is_debugging and self.current_thread_id is not None:
-            self.debug_manager.dap_continue(self.current_thread_id)
-            self.statusBar().showMessage("Debugger: Continue", 2000)
-        else:
-            self.statusBar().showMessage("Debugger not active or no current thread.", 2000)
-
-    def _on_step_over_action(self):
-        if self.debug_manager.is_debugging and self.current_thread_id is not None:
-            self.debug_manager.dap_next(self.current_thread_id)
-            self.statusBar().showMessage("Debugger: Step Over", 2000)
-        else:
-            self.statusBar().showMessage("Debugger not active or no current thread.", 2000)
-
-    def _on_step_in_action(self):
-        if self.debug_manager.is_debugging and self.current_thread_id is not None:
-            self.debug_manager.dap_step_in(self.current_thread_id)
-            self.statusBar().showMessage("Debugger: Step In", 2000)
-        else:
-            self.statusBar().showMessage("Debugger not active or no current thread.", 2000)
-
-    def _on_step_out_action(self):
-        if self.debug_manager.is_debugging and self.current_thread_id is not None:
-            self.debug_manager.dap_step_out(self.current_thread_id)
-            self.statusBar().showMessage("Debugger: Step Out", 2000)
-        else:
-            self.statusBar().showMessage("Debugger not active or no current thread.", 2000)
-
-    def _on_stop_debug_action(self):
-        if self.debug_manager.is_debugging:
-            self.statusBar().showMessage("Stopping debug session...", 0)
-            self.debug_manager.dap_disconnect(terminate_debuggee=True)
-        else:
-            self.statusBar().showMessage("No active debug session to stop.", 2000)
-
-    def _on_toggle_breakpoint_action(self):
-        current_editor = self.tab_widget.currentWidget()
-        if not isinstance(current_editor, CodeEditor):
-            self.statusBar().showMessage("No active editor to toggle breakpoint.", 2000)
-            return
-
-        file_path_str = self.file_manager.get_file_path(current_editor)
-        if not file_path_str:
-            self.statusBar().showMessage("Save file to set breakpoints.", 2000)
-            return
-
-        text_cursor = current_editor.textCursor()
-        line_number = text_cursor.blockNumber() + 1
-
-        file_bps = self.breakpoints_map.setdefault(file_path_str, {})
-        if line_number in file_bps:
-            del file_bps[line_number]
-            print(f"Breakpoint removed at {file_path_str}:{line_number}")
-        else:
-            file_bps[line_number] = {'line': line_number}
-            print(f"Breakpoint added at {file_path_str}:{line_number}")
-
-        if hasattr(self, 'breakpoints_view') and self.breakpoints_view.model():
-            if isinstance(self.breakpoints_view.model(), QStringListModel):
-                bp_list_str = []
-                for f_path, lines in self.breakpoints_map.items():
-                    for line in lines:
-                        bp_list_str.append(f"{Path(f_path).name}:{line}")
-                self.breakpoints_view.model().setStringList(bp_list_str)
-
-        dap_bps_for_file = list(file_bps.values())
-        if self.debug_manager.is_debugging:
-             self.debug_manager.dap_set_breakpoints(file_path_str, dap_bps_for_file)
-        self.statusBar().showMessage(f"Breakpoints updated for {Path(file_path_str).name}.", 2000)
 
     # --- Slots for DebugManager -> UI ---
     def _on_dap_initialized(self):
@@ -818,5 +796,5 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     main_win = MainWindow()
     main_win.show()
-    print("MainWindow DebugManager -> UI slots implemented.") # Updated message
+    print("MainWindow integration with CodeEditor for dirty status and breakpoints updated.")
     sys.exit(app.exec())
