@@ -1,6 +1,6 @@
 import sys
 from PySide6.QtWidgets import QApplication
-from main_window_refactored import MainWindow # Ensure this imports the correct MainWindow
+from main_window import MainWindow # Updated import
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
