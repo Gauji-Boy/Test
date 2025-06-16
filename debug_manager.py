@@ -1,7 +1,7 @@
 import json
 import re
-from PySide6.QtCore import QObject, Signal, QProcess, QTcpSocket, QByteArray, QTimer
-from PySide6.QtNetwork import QAbstractSocket
+from PySide6.QtCore import QObject, Signal, QProcess, QByteArray, QTimer
+from PySide6.QtNetwork import QAbstractSocket, QTcpSocket
 
 class DebugManager(QObject):
     # DAP Signals

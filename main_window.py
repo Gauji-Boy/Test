@@ -77,40 +77,40 @@ class MainWindow(QMainWindow):
         self.quit_action.triggered.connect(QApplication.instance().quit)
 
         self.run_action = QAction("&Run", self)
-        self.run_action.setShortcut(QKeySequence(Qt.Key.Key_F5))
+        self.run_action.setShortcut(QKeySequence(Qt.Key_F5))
         self.run_action.setStatusTip("Run the current file")
 
         self.start_debug_action = QAction("Start &Debugging", self)
-        self.start_debug_action.setShortcut(QKeySequence(Qt.Key.Key_F6))
+        self.start_debug_action.setShortcut(QKeySequence(Qt.Key_F6))
         self.start_debug_action.setStatusTip("Start a debug session for the current file")
 
         self.continue_action = QAction("&Continue", self)
-        self.continue_action.setShortcut(QKeySequence(Qt.Key.Key_F8))
+        self.continue_action.setShortcut(QKeySequence(Qt.Key_F8))
         self.continue_action.setStatusTip("Continue execution")
         self.continue_action.setEnabled(False)
 
         self.step_over_action = QAction("Step &Over", self)
-        self.step_over_action.setShortcut(QKeySequence(Qt.Key.Key_F10))
+        self.step_over_action.setShortcut(QKeySequence(Qt.Key_F10))
         self.step_over_action.setStatusTip("Step over the current line")
         self.step_over_action.setEnabled(False)
 
         self.step_in_action = QAction("Step &In", self)
-        self.step_in_action.setShortcut(QKeySequence(Qt.Key.Key_F11))
+        self.step_in_action.setShortcut(QKeySequence(Qt.Key_F11))
         self.step_in_action.setStatusTip("Step into the current function call")
         self.step_in_action.setEnabled(False)
 
         self.step_out_action = QAction("Step O&ut", self)
-        self.step_out_action.setShortcut(QKeySequence(Qt.Key.Key_ShiftModifier | Qt.Key.Key_F11))
+        self.step_out_action.setShortcut(QKeySequence(Qt.ShiftModifier | Qt.Key_F11))
         self.step_out_action.setStatusTip("Step out of the current function")
         self.step_out_action.setEnabled(False)
 
         self.stop_debug_action = QAction("S&top Debugging", self)
-        self.stop_debug_action.setShortcut(QKeySequence(Qt.Key.Key_ShiftModifier | Qt.Key.Key_F5))
+        self.stop_debug_action.setShortcut(QKeySequence(Qt.ShiftModifier | Qt.Key_F5))
         self.stop_debug_action.setStatusTip("Stop the current debug session")
         self.stop_debug_action.setEnabled(False)
         
         self.toggle_breakpoint_action = QAction("&Toggle Breakpoint", self)
-        self.toggle_breakpoint_action.setShortcut(QKeySequence(Qt.Key.Key_F9))
+        self.toggle_breakpoint_action.setShortcut(QKeySequence(Qt.Key_F9))
         self.toggle_breakpoint_action.setStatusTip("Toggle a breakpoint on the current line")
 
     def _setup_ui(self):
@@ -789,10 +789,84 @@ class MainWindow(QMainWindow):
             self.terminal.display_area.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_dap_error(self, message: str):
-        self.statusBar().showMessage(f"DAP Error: {message}", 7000)
+        QMessageBox.critical(self, "DAP Error", message)
+        self.statusBar().showMessage(f"DAP Error: {message}", 5000)
         if self.terminal:
             self.terminal.display_area.appendPlainText(f"[DAP SYSTEM ERROR] {message.strip()}\n")
             self.terminal.display_area.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _on_start_debug_action(self):
+        current_editor = self.tab_widget.currentWidget()
+        if not isinstance(current_editor, CodeEditor):
+            self.statusBar().showMessage("No active code editor selected for debugging.", 3000)
+            return
+        file_path_str = self.file_manager.get_file_path(current_editor)
+        if not file_path_str:
+            QMessageBox.warning(self, "Cannot Debug", "Please save the file before starting a debug session.")
+            return
+
+        self._program_to_launch_after_dap_init = file_path_str
+        self.debug_manager.start_dap_server(["python", "-m", "debugpy.adapter"], os.path.dirname(file_path_str))
+        self.statusBar().showMessage(f"Starting debug session for {Path(file_path_str).name}...", 3000)
+        self._update_debug_action_states(True, False)
+
+    def _on_continue_action(self):
+        if self.debug_manager.is_debugging and self.current_thread_id is not None:
+            self.debug_manager.dap_continue(self.current_thread_id)
+            self.statusBar().showMessage("Continuing execution...", 2000)
+            self._update_debug_action_states(True, False)
+
+    def _on_step_over_action(self):
+        if self.debug_manager.is_debugging and self.current_thread_id is not None:
+            self.debug_manager.dap_next(self.current_thread_id)
+            self.statusBar().showMessage("Stepping over...", 2000)
+            self._update_debug_action_states(True, False)
+
+    def _on_step_in_action(self):
+        if self.debug_manager.is_debugging and self.current_thread_id is not None:
+            self.debug_manager.dap_step_in(self.current_thread_id)
+            self.statusBar().showMessage("Stepping in...", 2000)
+            self._update_debug_action_states(True, False)
+
+    def _on_step_out_action(self):
+        if self.debug_manager.is_debugging and self.current_thread_id is not None:
+            self.debug_manager.dap_step_out(self.current_thread_id)
+            self.statusBar().showMessage("Stepping out...", 2000)
+            self._update_debug_action_states(True, False)
+
+    def _on_stop_debug_action(self):
+        if self.debug_manager.is_debugging:
+            self.debug_manager.dap_disconnect()
+            self.statusBar().showMessage("Stopping debug session...", 3000)
+            self._update_debug_action_states(False, False)
+        else:
+            self.statusBar().showMessage("No active debug session to stop.", 2000)
+
+    def _on_toggle_breakpoint_action(self):
+        current_editor = self.tab_widget.currentWidget()
+        if isinstance(current_editor, CodeEditor):
+            current_line = current_editor.textCursor().blockNumber() + 1
+            current_editor.toggle_breakpoint(current_line)
+        else:
+            self.statusBar().showMessage("No active code editor to toggle breakpoint.", 3000)
+
+    def _is_signal_connected(self, signal, slot):
+        try:
+            # PySide6 does not expose a direct way to check if a specific slot is connected
+            # to a signal. This is a workaround that might not be perfectly reliable
+            # across all PySide6 versions or complex scenarios.
+            # It attempts to connect the slot again; if it's already connected,
+            # it might return False or raise an error depending on the signal type.
+            # A more robust solution might involve tracking connections manually.
+            signal.connect(slot)
+            signal.disconnect(slot) # Disconnect if it was successfully connected (meaning it wasn't before)
+            return False
+        except RuntimeError:
+            # If connecting raises a RuntimeError, it often means it's already connected
+            return True
+        except Exception:
+            # Catch other potential exceptions
+            return False
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
