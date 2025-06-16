@@ -6,9 +6,10 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QTabWidget, QDockWidget, QToolBar, QPlainTextEdit,
-    QListView, QMessageBox, QFileDialog, QTreeView
+    QListView, QMessageBox, QFileDialog, QTreeView,
+    QListWidget, QTreeWidget, QTreeWidgetItem
 )
-from PySide6.QtCore import Qt, QSize, QByteArray, QProcess, QStringListModel
+from PySide6.QtCore import Qt, QSize, QByteArray, QProcess, QStringListModel, QFileInfo, QDir, QFileIconProvider
 from PySide6.QtGui import (
     QAction, QKeySequence, QTextCursor, QCloseEvent,
     QIcon, QStandardItemModel, QStandardItem
@@ -21,6 +22,8 @@ from process_manager import ProcessManager
 from interactive_terminal import InteractiveTerminal
 from debug_manager import DebugManager
 from code_editor import CodeEditor
+from file_explorer import FileExplorer # Added import
+from welcome_page import WelcomePage # Added import
 
 class MainWindow(QMainWindow):
     RUNNER_CONFIG = {
@@ -38,6 +41,7 @@ class MainWindow(QMainWindow):
         self.current_thread_id = None
         self._program_to_launch_after_dap_init = None
         self.breakpoints_map = {}
+        self.scope_item_map = {} # For mapping variablesReference to QTreeWidgetItem
 
         self._define_actions()
 
@@ -45,14 +49,21 @@ class MainWindow(QMainWindow):
         self.file_manager = FileManager()
         self.process_manager = ProcessManager()
         self.debug_manager = DebugManager(self)
+        self.welcome_page = None # Initialize welcome_page attribute
 
-        self._setup_ui()
+        self._setup_ui() # This will call _setup_debugger_ui internally
         self._setup_menus()
         self._setup_connections()
 
-        self.load_session()
-        if not self.statusBar().currentMessage():
+        self.load_session() # This might open files
+
+        # Show welcome page if no tabs are open after loading session
+        if self.tab_widget.count() == 0:
+            self._show_welcome_page()
+
+        if not self.statusBar().currentMessage() and self.tab_widget.count() > 0 : # Avoid overwriting session messages
             self.statusBar().showMessage("Application initialized.", 3000)
+
 
     def _define_actions(self):
         self.new_file_action = QAction("&New", self)
@@ -113,6 +124,14 @@ class MainWindow(QMainWindow):
         self.toggle_breakpoint_action.setShortcut(QKeySequence(Qt.Key_F9))
         self.toggle_breakpoint_action.setStatusTip("Toggle a breakpoint on the current line")
 
+        self.request_control_action = QAction("Request Control", self)
+        # Add icon later: self.request_control_action.setIcon(QIcon.fromTheme("system-run")) # Example
+        self.request_control_action.setStatusTip("Request control from AI co-pilot")
+
+        self.ai_assistant_action = QAction("AI Assistant", self)
+        # Add icon later: self.ai_assistant_action.setIcon(QIcon.fromTheme("help-contents")) # Example
+        self.ai_assistant_action.setStatusTip("Open AI Assistant panel")
+
     def _setup_ui(self):
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
@@ -130,30 +149,53 @@ class MainWindow(QMainWindow):
         if working_dir: self.terminal.start_shell(working_dir)
         else: self.terminal.display_area.appendPlainText("[System: Critical error - no valid CWD for terminal.]")
 
-        file_explorer_dock = QDockWidget("File Explorer", self)
-        file_explorer_dock.setObjectName("FileExplorerDockWidget")
-        placeholder_file_list = QListView()
-        file_explorer_dock.setWidget(placeholder_file_list)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, file_explorer_dock)
+        self.file_explorer_dock = QDockWidget("File Explorer", self) # Changed to self.file_explorer_dock
+        self.file_explorer_dock.setObjectName("FileExplorerDockWidget")
+        self.file_explorer = FileExplorer(self) # Create actual FileExplorer
+        self.file_explorer_dock.setWidget(self.file_explorer)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_explorer_dock)
 
-        self.file_toolbar = QToolBar("File Toolbar")
-        self.file_toolbar.setObjectName("FileToolBar")
+
+        # File Operations Toolbar
+        self.file_toolbar = QToolBar("File Operations")
+        self.file_toolbar.setObjectName("FileOperationsToolBar") # Changed object name for clarity
+        self.file_toolbar.setWindowTitle("File Operations")
         self.file_toolbar.addAction(self.new_file_action)
         self.file_toolbar.addAction(self.open_file_action)
         self.file_toolbar.addAction(self.save_file_action)
         self.file_toolbar.addAction(self.save_as_file_action)
-        self.addToolBar(self.file_toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.file_toolbar) # Ensure it's added to a specific area
         self.file_toolbar.setMovable(True)
         self.file_toolbar.setFloatable(True)
 
-        self.run_toolbar = QToolBar("Run Toolbar")
-        self.run_toolbar.setObjectName("RunToolBar")
-        self.run_toolbar.addAction(self.run_action)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.run_toolbar)
-        self.run_toolbar.setMovable(True)
-        self.run_toolbar.setFloatable(True)
+        # Execution Toolbar
+        self.execution_toolbar = QToolBar("Execution")
+        self.execution_toolbar.setObjectName("ExecutionToolBar")
 
-        self.debug_toolbar = QToolBar("Debug Toolbar")
+        self.language_selector = QComboBox()
+        self.language_selector.addItems(["Python", "JavaScript", "HTML"]) # Placeholder items
+        self.language_selector.setToolTip("Select Language")
+        self.execution_toolbar.addWidget(self.language_selector)
+
+        self.run_mode_selector = QComboBox()
+        self.run_mode_selector.addItems(["Run", "Debug"])
+        self.run_mode_selector.setToolTip("Select Run Mode")
+        self.execution_toolbar.addWidget(self.run_mode_selector)
+
+        self.execution_toolbar.addAction(self.run_action) # Moved from old run_toolbar
+        self.execution_toolbar.addAction(self.request_control_action)
+        self.execution_toolbar.addAction(self.ai_assistant_action)
+
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.execution_toolbar)
+        self.execution_toolbar.setMovable(True)
+        self.execution_toolbar.setFloatable(True)
+
+        # Remove old run_toolbar as its functionality is merged into execution_toolbar
+        # if hasattr(self, 'run_toolbar'):
+        #     self.removeToolBar(self.run_toolbar)
+        #     del self.run_toolbar
+
+        self.debug_toolbar = QToolBar("Debug Toolbar") # This might be conditionally shown later based on run_mode_selector
         self.debug_toolbar.setObjectName("DebugToolBar")
         self.debug_toolbar.addAction(self.start_debug_action)
         self.debug_toolbar.addAction(self.continue_action)
@@ -162,44 +204,40 @@ class MainWindow(QMainWindow):
         self.debug_toolbar.addAction(self.step_out_action)
         self.debug_toolbar.addAction(self.stop_debug_action)
         self.debug_toolbar.addAction(self.toggle_breakpoint_action)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.debug_toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.debug_toolbar) # Added to the same area for consistency
         self.debug_toolbar.setMovable(True)
         self.debug_toolbar.setFloatable(True)
-        self.debug_toolbar.setVisible(True)
+        self.debug_toolbar.setVisible(True) # Keep visible for now, future logic might hide/show it
 
-        self.call_stack_dock = QDockWidget("Call Stack", self)
-        self.call_stack_dock.setObjectName("CallStackDockWidget")
-        self.call_stack_view = QListView()
-        self.call_stack_view.setModel(QStringListModel([]))
-        self.call_stack_dock.setWidget(self.call_stack_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.call_stack_dock)
+        self._setup_debugger_ui() # New consolidated debugger UI
 
-        self.variables_dock = QDockWidget("Variables", self)
-        self.variables_dock.setObjectName("VariablesDockWidget")
-        self.variables_view = QTreeView()
-        model_vars = QStandardItemModel()
-        model_vars.setHorizontalHeaderLabels(["Name", "Value", "Type"])
-        self.variables_view.setModel(model_vars)
-        self.variables_dock.setWidget(self.variables_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
+    def _setup_debugger_ui(self):
+        self.debugger_dock = QDockWidget("Debugger", self)
+        self.debugger_dock.setObjectName("DebuggerDockWidget")
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.debugger_dock)
 
-        self.watch_dock = QDockWidget("Watch", self)
-        self.watch_dock.setObjectName("WatchDockWidget")
-        self.watch_view = QTreeView()
-        self.watch_view.setModel(QStandardItemModel())
-        self.watch_dock.setWidget(self.watch_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.watch_dock)
-        
-        self.breakpoints_dock = QDockWidget("Breakpoints", self)
-        self.breakpoints_dock.setObjectName("BreakpointsDockWidget")
-        self.breakpoints_view = QListView()
-        self.breakpoints_view.setModel(QStringListModel([]))
-        self.breakpoints_dock.setWidget(self.breakpoints_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.breakpoints_dock)
+        self.debugger_tabs = QTabWidget()
+        self.debugger_dock.setWidget(self.debugger_tabs)
 
-        self.tabifyDockWidget(self.call_stack_dock, self.variables_dock)
-        self.tabifyDockWidget(self.variables_dock, self.watch_dock)
-        self.tabifyDockWidget(self.watch_dock, self.breakpoints_dock)
+        # Call Stack Tab
+        self.call_stack_list = QListWidget()
+        self.debugger_tabs.addTab(self.call_stack_list, "Call Stack")
+
+        # Variables Tab
+        self.variables_tree = QTreeWidget()
+        self.variables_tree.setHeaderLabels(["Name", "Value", "Type"])
+        self.debugger_tabs.addTab(self.variables_tree, "Variables")
+
+        # Watch Tab
+        self.watch_tree = QTreeWidget()
+        self.watch_tree.setHeaderLabels(["Name", "Value", "Type"]) # Assuming same structure
+        self.debugger_tabs.addTab(self.watch_tree, "Watch")
+
+        # Breakpoints Tab
+        self.breakpoints_list = QListWidget()
+        self.debugger_tabs.addTab(self.breakpoints_list, "Breakpoints")
+
+        self.debugger_dock.setVisible(False) # Initially hidden
 
     def _setup_menus(self):
         file_menu = self.menuBar().addMenu("&File")
@@ -264,7 +302,26 @@ class MainWindow(QMainWindow):
         self.debug_manager.dap_output.connect(self._on_dap_output)
         self.debug_manager.dap_error.connect(self._on_dap_error)
 
+        if hasattr(self, 'file_explorer'):
+            self.file_explorer.file_opened.connect(self._on_file_explorer_open_file)
+            self.file_explorer.back_to_welcome_requested.connect(self._on_back_to_welcome_requested)
+
+
+    def _on_file_explorer_open_file(self, path_str: str):
+        # This slot is called when a file is double-clicked in the FileExplorer
+        self.file_manager.open_file(path_str) # This will trigger _on_file_content_loaded
+        # _on_file_content_loaded will handle switching from welcome page
+
     def _on_new_file_action(self):
+        if self.centralWidget() == self.welcome_page and self.welcome_page is not None:
+            self.setCentralWidget(self.tab_widget)
+            self.welcome_page.setVisible(False)
+            # Make relevant toolbars visible if they were hidden for welcome page
+            self.file_toolbar.setVisible(True)
+            self.execution_toolbar.setVisible(True)
+            self.debug_toolbar.setVisible(True)
+
+
         editor = CodeEditor(self)
         editor.textChanged.connect(lambda editor_instance=editor: self._on_editor_text_changed_generic(editor_instance))
         if hasattr(editor, 'breakpoint_toggled'):
@@ -303,16 +360,26 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No active editor tab to save as.", 3000)
 
     def _on_open_file_action(self):
+        # This is for the "File > Open" menu or toolbar action
         file_paths, _ = QFileDialog.getOpenFileNames(
-            self, "Open File", "",
+            self, "Open File", os.getcwd(), # Start in current working directory or last known
             "All Files (*);;Text Files (*.txt);;Python Files (*.py)"
         )
         if file_paths:
             for path_str in file_paths:
                 if path_str:
-                    self.file_manager.open_file(path_str)
+                    self.file_manager.open_file(path_str) # This will trigger _on_file_content_loaded
+                    # _on_file_content_loaded will handle switching from welcome page
 
     def _on_file_content_loaded(self, path: str, content: str):
+        if self.centralWidget() == self.welcome_page and self.welcome_page is not None:
+            self.setCentralWidget(self.tab_widget)
+            self.welcome_page.setVisible(False)
+            # Make relevant toolbars visible if they were hidden for welcome page
+            self.file_toolbar.setVisible(True)
+            self.execution_toolbar.setVisible(True)
+            self.debug_toolbar.setVisible(True)
+
         for i in range(self.tab_widget.count()):
             editor_widget = self.tab_widget.widget(i)
             if isinstance(editor_widget, CodeEditor) and self.file_manager.get_file_path(editor_widget) == path:
@@ -336,6 +403,13 @@ class MainWindow(QMainWindow):
 
         filename = Path(path).name
         tab_index = self.tab_widget.addTab(editor, filename)
+
+        # Set tab icon
+        icon_provider = QFileIconProvider()
+        file_info = QFileInfo(path)
+        icon = icon_provider.icon(file_info)
+        self.tab_widget.setTabIcon(tab_index, icon)
+
         self.tab_widget.setCurrentIndex(tab_index)
         self.file_manager.track_new_tab(editor, path)
         self.statusBar().showMessage(f"Opened: {filename}", 3000)
@@ -384,11 +458,17 @@ class MainWindow(QMainWindow):
                 else:
                     self._on_save_as_file_action()
                     if self.file_manager.is_dirty(widget_to_close):
-                        return
+                        if self.file_manager.is_dirty(widget_to_close): # Check if save as actually saved it
+                            return # Don't close if still dirty (e.g., user cancelled save as dialog)
             elif reply == QMessageBox.StandardButton.Cancel:
-                return
+                return # User cancelled closing, do nothing
+            # If Discard or if Save was successful and file is no longer dirty:
+
         self.file_manager.untrack_tab(widget_to_close)
         self.tab_widget.removeTab(index)
+
+        if self.tab_widget.count() == 0:
+            self._show_welcome_page()
 
     def _on_run_action(self):
         current_editor = self.tab_widget.currentWidget()
@@ -484,13 +564,12 @@ class MainWindow(QMainWindow):
             elif hasattr(editor_widget, 'update_gutter_breakpoints'):
                  editor_widget.update_gutter_breakpoints(set(file_bps.keys()))
 
-            if hasattr(self, 'breakpoints_view') and self.breakpoints_view.model():
-                if isinstance(self.breakpoints_view.model(), QStringListModel):
-                    bp_list_str = []
-                    for f_path, lines_dict in self.breakpoints_map.items():
-                        for line_num_key in lines_dict:
-                            bp_list_str.append(f"{Path(f_path).name}:{line_num_key}")
-                    self.breakpoints_view.model().setStringList(bp_list_str)
+            # Update new breakpoints_list
+            if hasattr(self, 'breakpoints_list'):
+                self.breakpoints_list.clear()
+                for f_path, lines_dict in self.breakpoints_map.items():
+                    for line_num_key in lines_dict:
+                        self.breakpoints_list.addItem(f"{Path(f_path).name}:{line_num_key}")
 
             if self.debug_manager and self.debug_manager.is_debugging:
                 dap_bps_for_file = list(file_bps.values())
@@ -508,8 +587,9 @@ class MainWindow(QMainWindow):
         state = self.session_manager.load_session()
         if not state:
             self.statusBar().showMessage("No previous session found or error loading session.", 3000)
-            if self.tab_widget.count() == 0:
-                self._on_new_file_action()
+            # self._on_new_file_action() # Replaced by welcome page logic below
+            # No previous session or error, and no tabs are open, show welcome page.
+            # This is handled by the check in __init__ after load_session completes.
             return
 
         try:
@@ -520,30 +600,30 @@ class MainWindow(QMainWindow):
 
             open_files = state.get('open_files', [])
             active_file_path = state.get('active_file', None)
-            opened_paths_for_active_check = []
 
             if open_files:
                 for path_str in open_files:
                     if Path(path_str).is_file():
-                        self.file_manager.open_file(path_str)
-                        opened_paths_for_active_check.append(path_str)
+                        self.file_manager.open_file(path_str) # This eventually calls _on_file_content_loaded
                     else:
                         self.statusBar().showMessage(f"Session: File not found '{path_str}', removed from session.", 3000)
             
-            if active_file_path and active_file_path in opened_paths_for_active_check:
-                for i in range(self.tab_widget.count()):
-                    editor_widget = self.tab_widget.widget(i)
-                    if editor_widget and self.file_manager.get_file_path(editor_widget) == active_file_path:
-                        self.tab_widget.setCurrentIndex(i)
-                        break
-            elif self.tab_widget.count() == 0:
-                 self._on_new_file_action()
-            self.statusBar().showMessage("Session loaded successfully.", 3000)
+                if active_file_path: # Check if active_file_path was in open_files and successfully opened
+                    for i in range(self.tab_widget.count()):
+                        editor_widget = self.tab_widget.widget(i)
+                        if editor_widget and self.file_manager.get_file_path(editor_widget) == active_file_path:
+                            self.tab_widget.setCurrentIndex(i)
+                            break
+                if self.tab_widget.count() > 0 : # Only show if files were actually opened
+                    self.statusBar().showMessage("Session loaded successfully.", 3000)
+            # If open_files is empty, or all files failed to load, tab_widget.count() will be 0.
+            # The logic in __init__ will then call _show_welcome_page().
+
         except Exception as e:
             self.statusBar().showMessage(f"Error restoring session: {e}", 5000)
             QMessageBox.warning(self, "Session Load Error", f"Could not fully restore session: {e}")
-            if self.tab_widget.count() == 0:
-                self._on_new_file_action()
+            # If session loading fails catastrophically, __init__ will call _show_welcome_page if no tabs.
+
 
     def save_session(self):
         if not self.session_manager:
@@ -664,25 +744,31 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Debug session terminated.", 5000)
         self.current_thread_id = None
         self._program_to_launch_after_dap_init = None
+        self.scope_item_map.clear()
         self._update_debug_action_states(is_debugging_active=False, is_paused=False)
         
-        if hasattr(self, 'call_stack_view') and isinstance(self.call_stack_view.model(), QStringListModel):
-            self.call_stack_view.model().setStringList([])
-        if hasattr(self, 'variables_view') and isinstance(self.variables_view.model(), QStandardItemModel):
-            self.variables_view.model().removeRows(0, self.variables_view.model().rowCount())
-        
-        for dock_name in ["call_stack_dock", "variables_dock", "watch_dock", "breakpoints_dock"]:
-            if hasattr(self, dock_name):
-                getattr(self, dock_name).hide()
+        if hasattr(self, 'debugger_dock'):
+            self.debugger_dock.setVisible(False)
+        if hasattr(self, 'call_stack_list'):
+            self.call_stack_list.clear()
+        if hasattr(self, 'variables_tree'):
+            self.variables_tree.clear()
+        if hasattr(self, 'watch_tree'):
+            self.watch_tree.clear()
+        # Breakpoints list is not cleared here, as it reflects user settings, not session state.
+        # However, the old code did not clear breakpoints_view here either.
 
     def _on_breakpoint_hit(self, filepath: str, line: int, thread_id: int, frame_details: dict):
         self.statusBar().showMessage(f"Paused: {frame_details.get('reason', 'breakpoint')} at {Path(filepath).name}:{line}, Thread: {thread_id}", 0)
         self.current_thread_id = thread_id
+        self.scope_item_map.clear() # Clear for new context
+        if hasattr(self, 'variables_tree'): # Clear previous variables before new scopes arrive
+            self.variables_tree.clear()
         self._update_debug_action_states(is_debugging_active=True, is_paused=True)
         
-        for dock_name in ["call_stack_dock", "variables_dock", "watch_dock", "breakpoints_dock"]:
-            if hasattr(self, dock_name):
-                getattr(self, dock_name).setVisible(True); getattr(self, dock_name).raise_()
+        if hasattr(self, 'debugger_dock'):
+            self.debugger_dock.setVisible(True)
+            self.debugger_dock.raise_()
 
         found_tab = False
         if filepath and filepath != "UnknownFile":
@@ -705,80 +791,112 @@ class MainWindow(QMainWindow):
         self.debug_manager.dap_stack_trace(thread_id)
 
     def _on_threads_received(self, threads_list: list):
-        if hasattr(self, 'call_stack_view') and isinstance(self.call_stack_view.model(), QStringListModel):
-            model = self.call_stack_view.model()
-            thread_items = [f"Thread {t.get('id')} : {t.get('name', 'Unnamed')}" for t in threads_list]
-            model.setStringList(thread_items)
-        else:
-            print(f"Threads received, but call_stack_view or its QStringListModel not ready/available.")
+        # This method might need to update a specific "Threads" view if one was added.
+        # For now, the call stack is often tied to a selected thread.
+        # If call_stack_list is meant to show threads first, this needs adjustment.
+        # Assuming call_stack_list shows stack frames of the *current* or *first* thread.
+        # The current design implies dap_stack_trace is called for a specific (current) thread_id.
+        print(f"Threads received (info): {threads_list}")
+        # If you had a dedicated QListWidget for threads:
+        # self.threads_list_widget.clear()
+        # for t in threads_list:
+        #     self.threads_list_widget.addItem(f"Thread {t.get('id')} : {t.get('name', 'Unnamed')}")
 
     def _on_stack_frames_received(self, frames_list: list):
-        if hasattr(self, 'call_stack_view') and isinstance(self.call_stack_view.model(), QStringListModel):
-            model = self.call_stack_view.model()
-            frame_strings = []
+        if hasattr(self, 'call_stack_list'):
+            self.call_stack_list.clear()
             for frame in frames_list:
                 name = frame.get('name', 'frame')
                 source_data = frame.get('source', {})
-                file_name_from_source = source_data.get('name', Path(source_data.get('path', '')).name)
+                file_name_from_source = source_data.get('name', Path(source_data.get('path', 'Unknown')).name)
                 line = frame.get('line', 0)
-                frame_id = frame.get('id')
-                frame_strings.append(f"{name} ({file_name_from_source}:{line}) [id:{frame_id}]")
-            model.setStringList(frame_strings)
+                frame_id = frame.get('id') # This ID is crucial for fetching scopes
+                item_text = f"{name} ({file_name_from_source}:{line}) [id:{frame_id}]"
+                list_item = QListWidgetItem(item_text, self.call_stack_list)
+                list_item.setData(Qt.ItemDataRole.UserRole, frame_id) # Store frame_id for potential use
 
             if frames_list and self.debug_manager.is_debugging:
                 top_frame_id = frames_list[0].get('id')
                 if top_frame_id is not None:
                     print(f"Top stack frame ID: {top_frame_id}. Requesting scopes.")
                     self.debug_manager.dap_scopes(top_frame_id)
-                else:
-                    if hasattr(self, 'variables_view') and isinstance(self.variables_view.model(), QStandardItemModel):
-                        self.variables_view.model().removeRows(0, self.variables_view.model().rowCount())
+                else: # No frames or no ID, clear variables view
+                    if hasattr(self, 'variables_tree'):
+                        self.variables_tree.clear()
+                        self.scope_item_map.clear()
         else:
-            print(f"Stack frames received, but call_stack_view or its QStringListModel not ready.")
+            print(f"Stack frames received, but call_stack_list not ready.")
 
     def _on_scopes_received(self, scopes_list: list):
-        if hasattr(self, 'variables_view') and isinstance(self.variables_view.model(), QStandardItemModel):
-            model = self.variables_view.model()
-            model.removeRows(0, model.rowCount())
-            model.setHorizontalHeaderLabels(["Name", "Value", "Type"])
-            root_item = model.invisibleRootItem()
-            for scope in scopes_list:
-                scope_name = scope.get('name', 'Scope')
-                variables_ref = scope.get('variablesReference')
-                name_col_item = QStandardItem(scope_name)
-                name_col_item.setEditable(False)
-                name_col_item.setData(variables_ref, Qt.ItemDataRole.UserRole)
-                value_col_item = QStandardItem("")
-                value_col_item.setEditable(False)
-                type_col_item = QStandardItem("<Scope>")
-                type_col_item.setEditable(False)
-                root_item.appendRow([name_col_item, value_col_item, type_col_item])
-                if variables_ref > 0:
-                    self.debug_manager.dap_variables(variables_ref)
-        else:
-             print(f"Scopes received, but variables_view or its QStandardItemModel not ready.")
+        if hasattr(self, 'variables_tree'):
+            # self.variables_tree.clear() # Clearing here would remove scopes before children are added if async.
+                                        # Clearing is now done in _on_breakpoint_hit.
+            # self.scope_item_map.clear() # Also moved to _on_breakpoint_hit
 
-    def _on_variables_received(self, variables_list: list):
-        print(f"Variables received (simplified display): {variables_list}")
-        if hasattr(self, 'variables_view') and isinstance(self.variables_view.model(), QStandardItemModel):
-            model = self.variables_view.model()
-            parent_item_for_vars = model.invisibleRootItem()
+            # Check if the tree is empty (first time after a pause or clear)
+            # This is to avoid adding duplicate scopes if the signal is somehow emitted multiple times
+            # without an intervening _on_breakpoint_hit.
+            if self.variables_tree.topLevelItemCount() == 0:
+                for scope in scopes_list:
+                    scope_name = scope.get('name', 'Scope')
+                    variables_ref = scope.get('variablesReference')
+                    scope_item = QTreeWidgetItem(self.variables_tree, [scope_name, "", "<Scope>"])
+                    scope_item.setData(0, Qt.ItemDataRole.UserRole, variables_ref) # Store ref for expansion/identification
+                    if variables_ref > 0:
+                        self.scope_item_map[variables_ref] = scope_item # Map ref to item for _on_variables_received
+                        self.debug_manager.dap_variables(variables_ref)
+            else:
+                # If tree is not empty, it implies scopes are already there.
+                # We might need to update them or handle this case more gracefully.
+                # For now, assume _on_breakpoint_hit correctly clears for a new context.
+                print("Variables tree not empty in _on_scopes_received, potential re-entry or stale state.")
+
+
+        else:
+             print(f"Scopes received, but variables_tree not ready.")
+
+    def _on_variables_received(self, variables_list: list, original_request_ref: int = 0): # original_request_ref is ideal
+        print(f"Variables received for ref {original_request_ref} (simplified display): {variables_list}")
+        if hasattr(self, 'variables_tree'):
+            parent_item = self.scope_item_map.get(original_request_ref)
+
+            if not parent_item: # Fallback heuristic if original_request_ref was not available or mapping failed
+                # Try to find a suitable parent: last top-level item with no children and matching ref if possible
+                # This is imperfect.
+                for i in range(self.variables_tree.topLevelItemCount() -1, -1, -1):
+                    item = self.variables_tree.topLevelItem(i)
+                    stored_ref = item.data(0, Qt.ItemDataRole.UserRole)
+                    if stored_ref == original_request_ref or (original_request_ref == 0 and stored_ref > 0 and item.childCount() == 0) : # original_request_ref=0 means we don't know
+                        parent_item = item
+                        break
+                if not parent_item:
+                     parent_item = self.variables_tree.invisibleRootItem()
+
+
+            # Clear existing children of this specific scope item before adding new ones
+            # Take a copy of children list before iterating for removal
+            children = []
+            for i in range(parent_item.childCount()):
+                children.append(parent_item.child(i))
+            for child in children:
+                parent_item.removeChild(child)
+
             for var_info in variables_list:
                 name = var_info.get('name', 'N/A')
-                value = var_info.get('value', '')
+                value = str(var_info.get('value', '')) # Ensure value is string
                 var_type = var_info.get('type', '')
                 var_ref = var_info.get('variablesReference', 0)
-                name_item = QStandardItem(name)
-                name_item.setEditable(False)
-                value_item = QStandardItem(value)
-                value_item.setEditable(False)
-                type_item = QStandardItem(var_type)
-                type_item.setEditable(False)
+
+                var_item = QTreeWidgetItem(parent_item, [name, value, var_type])
                 if var_ref > 0:
-                    name_item.setData(var_ref, Qt.ItemDataRole.UserRole)
-                parent_item_for_vars.appendRow([name_item, value_item, type_item])
+                    var_item.setData(0, Qt.ItemDataRole.UserRole, var_ref) # For expandable variables
+                    self.scope_item_map[var_ref] = var_item # So nested variables can find their parent
+                    # Potentially, could auto-expand or fetch children here if desired:
+                    # self.debug_manager.dap_variables(var_ref)
+            if parent_item is not self.variables_tree.invisibleRootItem():
+                 parent_item.setExpanded(True)
         else:
-            print(f"Variables received, but variables_view or its QStandardItemModel not ready.")
+            print(f"Variables received, but variables_tree not ready.")
 
     def _on_dap_output(self, category: str, text: str):
         if self.terminal:
@@ -868,9 +986,113 @@ class MainWindow(QMainWindow):
             # Catch other potential exceptions
             return False
 
+    def _close_all_tabs(self) -> bool:
+        """Closes all open tabs, prompting for save if necessary. Returns True if all tabs closed, False otherwise."""
+        while self.tab_widget.count() > 0:
+            current_tab_widget_count = self.tab_widget.count()
+            # _on_tab_close_requested will remove the tab if close is not cancelled
+            self._on_tab_close_requested(0) # Always try to close the first tab
+            if self.tab_widget.count() == current_tab_widget_count:
+                # User cancelled the close operation for a tab
+                return False
+        return True
+
+
+    def _show_welcome_page(self):
+        # This check is important to avoid issues if called when tabs are still open
+        if self.tab_widget.count() > 0:
+            # If for some reason this is called with tabs open, switch to tabs and log warning
+            if self.centralWidget() != self.tab_widget:
+                 self.setCentralWidget(self.tab_widget)
+            print("Warning: _show_welcome_page called while tabs are open. Aborting welcome page display.")
+            return
+
+        if not hasattr(self, 'welcome_page') or self.welcome_page is None:
+            try:
+                # recent_folders = self.session_manager.get_recent_folders() # TODO: Implement in SessionManager
+                recent_folders = [] # Placeholder for now
+            except AttributeError: # Fallback if SessionManager method doesn't exist yet
+                recent_folders = []
+                print("Warning: SessionManager.get_recent_folders() not found. Using empty list for recent folders.")
+
+            self.welcome_page = WelcomePage(recent_folders)
+            self.welcome_page.new_file_requested.connect(self._on_new_file_action)
+            self.welcome_page.open_file_requested.connect(self._on_open_file_action)
+            self.welcome_page.open_folder_requested.connect(self._on_open_folder_action)
+            self.welcome_page.recent_path_selected.connect(self._on_recent_folder_selected)
+            # self.welcome_page.join_session_requested.connect(...) # TODO: Implement join session
+
+        self.setCentralWidget(self.welcome_page)
+        self.welcome_page.setVisible(True)
+
+        # Hide toolbars and docks that are not relevant for the welcome page
+        if hasattr(self, 'debugger_dock'):
+            self.debugger_dock.setVisible(False)
+        # self.file_toolbar.setVisible(False) # Decided to keep file ops for now
+        # self.execution_toolbar.setVisible(False) # Keep for consistency or if user opens folder
+        # self.debug_toolbar.setVisible(False) # Keep for consistency
+
+    def _on_back_to_welcome_requested(self):
+        if self._close_all_tabs():
+            self._show_welcome_page()
+
+    def _on_open_folder_action(self):
+        start_dir = QDir.homePath()
+        try:
+            # recent_folders = self.session_manager.get_recent_folders() # TODO
+            # if recent_folders and len(recent_folders) > 0: start_dir = recent_folders[0]
+            pass # Using QDir.homePath() for now
+        except AttributeError:
+            print("Warning: SessionManager.get_recent_folders() not found for _on_open_folder_action.")
+
+        dir_path = QFileDialog.getExistingDirectory(self, "Open Folder", start_dir)
+        if dir_path:
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.set_root_path(dir_path)
+            try:
+                # self.session_manager.add_recent_folder(dir_path) # TODO: Implement in SessionManager
+                pass
+            except AttributeError:
+                print(f"Warning: SessionManager.add_recent_folder() not found for {dir_path}.")
+
+            if self.centralWidget() == self.welcome_page and self.welcome_page is not None:
+                self.setCentralWidget(self.tab_widget) # Switch to tab view (even if empty)
+                self.welcome_page.setVisible(False)
+                # Make relevant toolbars visible
+                self.file_toolbar.setVisible(True)
+                self.execution_toolbar.setVisible(True)
+                self.debug_toolbar.setVisible(True)
+            self.statusBar().showMessage(f"Opened folder: {dir_path}", 3000)
+
+
+    def _on_recent_folder_selected(self, path: str):
+        if Path(path).is_dir():
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.set_root_path(path)
+            try:
+                # self.session_manager.add_recent_folder(path) # TODO: Implement in SessionManager
+                pass
+            except AttributeError:
+                 print(f"Warning: SessionManager.add_recent_folder() not found for {path}.")
+
+
+            if self.centralWidget() == self.welcome_page and self.welcome_page is not None:
+                self.setCentralWidget(self.tab_widget) # Switch to tab view
+                self.welcome_page.setVisible(False)
+                # Make relevant toolbars visible
+                self.file_toolbar.setVisible(True)
+                self.execution_toolbar.setVisible(True)
+                self.debug_toolbar.setVisible(True)
+            self.statusBar().showMessage(f"Opened recent folder: {path}", 3000)
+        else:
+            QMessageBox.warning(self, "Folder Not Found", f"The folder '{path}' could not be found.")
+            # TODO: Consider removing it from recent list via session_manager
+
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     main_win = MainWindow()
     main_win.show()
-    print("MainWindow integration with CodeEditor for dirty status and breakpoints updated.")
+    # print("MainWindow integration with CodeEditor for dirty status and breakpoints updated.") # Old message
+    print("Aether Editor started.")
     sys.exit(app.exec())
