@@ -5,12 +5,20 @@ import json
 import os
 import sys
 from PySide6.QtCore import QThreadPool # Import QThreadPool
+import logging
 
 # Import worker threads
 from worker_threads import JediCompletionWorker, PyflakesLinterWorker, WorkerSignals
 
 from python_highlighter import PythonHighlighter # Import the dedicated highlighter
+from config_manager import ConfigManager # Added
 
+# Fallback editor settings if config.json is missing or corrupted
+FALLBACK_EDITOR_SETTINGS = {
+    "auto_pairs": {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '<': '>'},
+    "tab_stop_char_width_multiplier": 4,
+    "linter_interval_ms": 700
+}
 
 class LineNumberArea(QWidget):
     def __init__(self, editor):
@@ -172,49 +180,57 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
 
     def __init__(self, parent=None): # Parent will be the CodeEditor QWidget
         super().__init__(parent)
-        self.setTabStopDistance(4 * self.fontMetrics().averageCharWidth())
+
         self.file_path = None # file_path attribute resides here
         self.current_language = "Plain Text"
+        self.logger = logging.getLogger(__name__ + "._InternalCodeEditor") # Specific logger
 
-        self.theme_config = self._load_theme_config()
+        config_mgr = ConfigManager()
+        loaded_settings = config_mgr.load_setting('editor_settings', FALLBACK_EDITOR_SETTINGS)
+
+        self.PAIRS = loaded_settings.get("auto_pairs", FALLBACK_EDITOR_SETTINGS["auto_pairs"])
+        self.CLOSING_CHARS = set(self.PAIRS.values())
+
+        tab_multiplier = loaded_settings.get("tab_stop_char_width_multiplier", FALLBACK_EDITOR_SETTINGS["tab_stop_char_width_multiplier"])
+        self.setTabStopDistance(tab_multiplier * self.fontMetrics().averageCharWidth())
+
+        self.linter_interval_ms = loaded_settings.get("linter_interval_ms", FALLBACK_EDITOR_SETTINGS["linter_interval_ms"])
+
+        self.theme_config = self._load_theme_config() # Theme can still be from its own file for now
         self._apply_editor_theme()
 
         self.highlighter = PythonHighlighter(self.document(), self.theme_config)
         self.thread_pool = QThreadPool.globalInstance()
-        self.setup_linter()
+        self.setup_linter() # Linter interval is used here
         self.setup_completer()
-
-        self.PAIRS = {
-            '(': ')', '[': ']', '{': '}',
-            '"': '"', "'": "'", '<': '>'
-        }
-        self.CLOSING_CHARS = set(self.PAIRS.values())
 
         # textChanged signal will be connected by the outer CodeEditor
         self.cursorPositionChanged.connect(self._emit_cursor_position)
         self._is_programmatic_change = False
+        # self.logger already initialized above
 
     # All original CodeEditor methods that were QPlainTextEdit specific are moved here
     def _load_theme_config(self):
-        print("LOG: CodeEditor._load_theme_config - Entry")
+        self.logger.debug("Loading theme config.")
         config_path = os.path.join(os.path.dirname(__file__), 'config', 'theme.json')
         try:
             with open(config_path, 'r') as f:
                 return json.load(f)
         except FileNotFoundError:
-            sys.stderr.write(f"Theme config file not found at {config_path}. Using default theme.\n")
+            self.logger.warning(f"Theme config file not found at {config_path}. Using default theme.")
             return {}
         except json.JSONDecodeError:
-            sys.stderr.write(f"Error decoding theme config from {config_path}. Using default theme.\n")
+            self.logger.error(f"Error decoding theme config from {config_path}. Using default theme.", exc_info=True)
             return {}
         except Exception as e:
-            sys.stderr.write(f"An unexpected error occurred loading theme config from {config_path}: {e}\n")
+            self.logger.error(f"An unexpected error occurred loading theme config from {config_path}: {e}", exc_info=True)
             return {}
-        finally:
-            print("LOG: CodeEditor._load_theme_config - Exit")
+        # finally: # Removed as it's not adding much value here
+            # self.logger.debug("Theme loading finished attempt.")
+
 
     def _apply_editor_theme(self):
-        print("LOG: CodeEditor._apply_editor_theme - Entry")
+        self.logger.debug("Applying editor theme.")
         editor_theme = self.theme_config.get("editor", {})
         bg_color = editor_theme.get("background", "#282c34")
         fg_color = editor_theme.get("foreground", "#abb2bf")
@@ -231,12 +247,12 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                 background-color: {bg_color};
             }}
         """)
-        print("LOG: CodeEditor._apply_editor_theme - Exit")
+        # self.logger.debug("Editor theme applied.") # Can be too verbose
 
     def _update_language_and_highlighting(self):
-        print("LOG: CodeEditor._update_language_and_highlighting - Entry")
+        self.logger.debug(f"Updating language and highlighting for file: {self.file_path}")
         if self._is_programmatic_change:
-            print("LOG: CodeEditor._update_language_and_highlighting - Programmatic change, skipping.")
+            self.logger.debug("Programmatic change detected, skipping update_language_and_highlighting.")
             return
 
         old_language = self.current_language
@@ -257,29 +273,31 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
             self._is_programmatic_change = False # Reset flag after programmatic change
 
         if self.current_language != old_language:
+            self.logger.info(f"Language changed from '{old_language}' to '{self.current_language}'.")
             self.language_changed_signal.emit(self.current_language)
         
-        self.linter_timer.start()
-        print("LOG: CodeEditor._update_language_and_highlighting - Exit")
+        self.linter_timer.start() # Start or restart linter timer
+        # self.logger.debug("Language and highlighting update finished.") # Can be verbose
 
     def set_file_path_and_update_language(self, file_path):
         """
         Sets the file path for the editor and triggers language detection and highlighting.
         This method should be called when a new file is opened or saved.
         """
+        self.logger.info(f"Setting file path to: {file_path} and updating language.")
         self.file_path = file_path
         self._update_language_and_highlighting()
 
     def _emit_cursor_position(self):
-        print("LOG: CodeEditor._emit_cursor_position - Entry")
+        # This can be very verbose, so consider DEBUG level
+        # self.logger.debug("Emitting cursor position.")
         cursor = self.textCursor()
         line = cursor.blockNumber() + 1
         column = cursor.columnNumber() + 1
         self.cursor_position_changed_signal.emit(line, column)
-        print("LOG: CodeEditor._emit_cursor_position - Exit")
 
     def setup_completer(self):
-        print("LOG: CodeEditor.setup_completer - Entry")
+        self.logger.debug("Setting up completer.")
         self.completer = QCompleter(self)
         self.completer.setWidget(self)
         self.completer.setCompletionMode(QCompleter.PopupCompletion)
@@ -288,20 +306,21 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
         self.completer.activated.connect(self.insert_completion)
 
         self.cursorPositionChanged.connect(self.show_completion_if_dot)
-        print("LOG: CodeEditor.setup_completer - Exit")
+        # self.logger.debug("Completer setup finished.")
 
     def show_completion_if_dot(self):
-        print("LOG: CodeEditor.show_completion_if_dot - Entry")
+        # self.logger.debug("Checking for dot to show completion.")
         cursor = self.textCursor()
         text_before_cursor = self.toPlainText()[:cursor.position()]
         if text_before_cursor and text_before_cursor[-1] == '.':
+            self.logger.debug("Dot detected, requesting completions.")
             self.request_completions()
         elif self.completer.popup().isVisible():
             self.completer.popup().hide()
-        print("LOG: CodeEditor.show_completion_if_dot - Exit")
+        # self.logger.debug("show_completion_if_dot finished.")
 
     def request_completions(self):
-        print("LOG: CodeEditor.request_completions - Entry")
+        self.logger.debug("Requesting completions.")
         text = self.toPlainText()
         line = self.textCursor().blockNumber() + 1
         column = self.textCursor().columnNumber()
@@ -309,16 +328,17 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
 
         worker = JediCompletionWorker(text, line, column, file_path)
         worker.signals.result.connect(self._handle_completions_result)
-        worker.signals.error.connect(lambda msg: sys.stderr.write(f"Jedi error: {msg}\n"))
+        worker.signals.error.connect(lambda msg: self.logger.error(f"Jedi completion error: {msg}"))
         self.thread_pool.start(worker)
-        print("LOG: CodeEditor.request_completions - Exit")
+        # self.logger.debug("JediCompletionWorker started.")
 
     @Slot(list)
     def _handle_completions_result(self, words):
-        print("LOG: CodeEditor._handle_completions_result - Entry")
+        self.logger.debug(f"Handling completions result: {words[:5]}...") # Log first 5 for brevity
         self.completer.model().setStringList(words)
 
         if words:
+            self.logger.debug("Completions found, showing popup.")
             cursor_rect = self.cursorRect(self.textCursor())
             self.completer.popup().setGeometry(
                 self.mapToGlobal(cursor_rect.bottomLeft()).x(),
@@ -328,13 +348,13 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
             )
             self.completer.complete()
         else:
+            self.logger.debug("No completions found, hiding popup.")
             self.completer.popup().hide()
-        print("LOG: CodeEditor._handle_completions_result - Exit")
 
     def insert_completion(self, completion):
-        print("LOG: CodeEditor.insert_completion - Entry")
+        self.logger.debug(f"Inserting completion: {completion}")
         if self.completer.widget() is not self:
-            print("LOG: CodeEditor.insert_completion - Completer widget mismatch, returning.")
+            self.logger.warning("Completer widget mismatch, not inserting completion.")
             return
 
         tc = self.textCursor()
@@ -345,28 +365,27 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
         tc.insertText(completion)
         self.setTextCursor(tc)
         self._is_programmatic_change = False # Reset flag after programmatic change
-        print("LOG: CodeEditor.insert_completion - Exit")
+        self.logger.debug("Completion inserted.")
 
     def setup_linter(self):
-        print("LOG: CodeEditor.setup_linter - Entry")
+        self.logger.debug("Setting up linter timer.")
         self.linter_timer = QTimer(self)
-        self.linter_timer.setInterval(700)
+        # Use the interval loaded from settings
+        self.linter_timer.setInterval(self.linter_interval_ms)
         self.linter_timer.setSingleShot(True)
         self.linter_timer.timeout.connect(self.lint_code)
-        print("LOG: CodeEditor.setup_linter - Exit")
 
     def lint_code(self):
-        print("LOG: CodeEditor.lint_code - Entry")
+        self.logger.debug(f"Requesting linting for: {self.file_path if self.file_path else 'untitled'}")
         code = self.toPlainText()
-        file_path = self.file_path if self.file_path else "untitled.py"
+        file_path = self.file_path if self.file_path else "untitled.py" # Pyflakes might need a filename
         worker = PyflakesLinterWorker(code)
         worker.signals.result.connect(self.apply_linting_highlights)
-        worker.signals.error.connect(lambda msg: sys.stderr.write(f"Pyflakes error: {msg}\n"))
+        worker.signals.error.connect(lambda msg: self.logger.error(f"Pyflakes linter error: {msg}"))
         self.thread_pool.start(worker)
-        print("LOG: CodeEditor.lint_code - Exit")
 
     def apply_linting_highlights(self, errors):
-        print("LOG: CodeEditor.apply_linting_highlights - Entry")
+        self.logger.debug(f"Applying {len(errors)} linting highlights.")
         self._is_programmatic_change = True # Set flag before programmatic change
         extra_selections = []
         error_format = QTextCharFormat()
@@ -387,10 +406,10 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
 
         self.setExtraSelections(extra_selections)
         self._is_programmatic_change = False # Reset flag after programmatic change
-        print("LOG: CodeEditor.apply_linting_highlights - Exit")
+        # self.logger.debug("Linting highlights applied.") # Can be verbose
 
     def keyPressEvent(self, event: QKeyEvent):
-        print(f"LOG: CodeEditor.keyPressEvent - Key: {event.key()}, Text: '{event.text()}' - Entry")
+        # self.logger.debug(f"KeyPress: Key {event.key()}, Text '{event.text()}'") # Very verbose
         
         # Host-side logic to reclaim control
         if self.isReadOnly(): # The host is currently a viewer
@@ -437,7 +456,7 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                 cursor.insertText("    ")
             self._is_programmatic_change = False
             event.accept() # Consume the event
-            print("LOG: CodeEditor.keyPressEvent - Tab handled, Exit")
+            # self.logger.debug("Tab key handled.")
             return
 
         # 2. Handle "Smart Over-Typing" for Closing Brackets
@@ -448,7 +467,7 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                 self.setTextCursor(cursor)
                 self._is_programmatic_change = False
                 event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Over-typing handled, Exit")
+                # self.logger.debug("Over-typing of closing char handled.")
                 return
 
         # 3. Handle Context-Aware Insertion for Opening Brackets (Auto-pairing)
@@ -462,7 +481,7 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                 self.setTextCursor(cursor)
                 self._is_programmatic_change = False
                 event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Auto-pair wrap handled, Exit")
+                # self.logger.debug("Auto-pair wrap of selection handled.")
                 return
             else:
                 # Context-aware insertion
@@ -481,7 +500,7 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                     self.setTextCursor(cursor)
                     self._is_programmatic_change = False
                     event.accept() # Consume the event
-                    print("LOG: CodeEditor.keyPressEvent - Context-aware auto-pair insert handled, Exit")
+                    # self.logger.debug("Context-aware auto-pair insert handled.")
                     return
         
         # 4. Smart Backspace
@@ -495,12 +514,12 @@ class _InternalCodeEditor(QPlainTextEdit): # Renamed and inherits QPlainTextEdit
                 self.setTextCursor(cursor)
                 self._is_programmatic_change = False
                 event.accept() # Consume the event
-                print("LOG: CodeEditor.keyPressEvent - Smart Backspace handled, Exit")
+                # self.logger.debug("Smart backspace handled.")
                 return
 
         # If none of the special cases are handled, call the default handler
         super().keyPressEvent(event)
-        print("LOG: _InternalCodeEditor.keyPressEvent - Default handler, Exit")
+        # self.logger.debug("Default keyPressEvent handler called.")
 
 
 class CodeEditor(QWidget): # Now inherits QWidget

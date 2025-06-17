@@ -1,6 +1,12 @@
 import sys
 import os
+import logging
+from logging_config import setup_logging
 from PySide6.QtWidgets import QApplication
+
+# Initialize logging as the first thing
+setup_logging(level=logging.DEBUG, log_to_file=True) # Or logging.INFO
+
 from main_window import MainWindow
 from welcome_screen import WelcomeScreen
 
@@ -13,10 +19,11 @@ class AppController:
 
         # Connect signals
         self.welcome_screen.path_selected.connect(self.launch_main_window)
-        self.welcome_screen.recent_projects_changed.connect(self.main_window._update_recent_projects_from_welcome)
-        self.welcome_screen.clear_recents_requested.connect(self.main_window._clear_recent_projects)
-        self.welcome_screen.rename_recent_requested.connect(self.main_window._handle_rename_recent_project)
-        self.welcome_screen.remove_recent_requested.connect(self.main_window._handle_remove_recent_project)
+        # Connect WelcomeScreen signals to UserSessionCoordinator methods via main_window instance
+        self.welcome_screen.recent_projects_changed.connect(self.main_window.user_session_coordinator.update_recent_projects_from_welcome)
+        self.welcome_screen.clear_recents_requested.connect(self.main_window.user_session_coordinator.clear_recent_projects_from_welcome)
+        self.welcome_screen.rename_recent_requested.connect(self.main_window.user_session_coordinator.handle_rename_recent_project)
+        self.welcome_screen.remove_recent_requested.connect(self.main_window.user_session_coordinator.handle_remove_recent_project_with_confirmation)
         # Connect the join session requested signal
         self.welcome_screen.join_session_requested.connect(self.launch_for_join_session)
 

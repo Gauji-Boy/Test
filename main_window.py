@@ -5,18 +5,31 @@ from file_explorer import FileExplorer
 from code_editor import CodeEditor
 from debug_manager import DebugManager # Import DebugManager
 from interactive_terminal import InteractiveTerminal # Import the new interactive terminal
-from network_manager import NetworkManager # Import NetworkManager
+from command_output_viewer import CommandOutputViewer # Import CommandOutputViewer
+from network_manager import NetworkManager, NetworkMessageType # Import NetworkManager and Enum
 from connection_dialog import ConnectionDialog # Import ConnectionDialog
 from ai_controller import AIController # Import AIController
 from file_manager import FileManager
 from session_manager import SessionManager
 from process_manager import ProcessManager
+
+# Import new coordinators
+from editor_file_coordinator import EditorFileCoordinator
+from user_session_coordinator import UserSessionCoordinator
+from collaboration_service import CollaborationService
+from execution_coordinator import ExecutionCoordinator
+from config_manager import ConfigManager # Added
+from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP # Added
+
+import logging
 import tempfile
 import os
 import sys
 import shutil # For rmtree
 import json # Import json for structured messages
 import black # Import black for synchronous formatting
+
+logger = logging.getLogger(__name__) # Added
 
 class MainWindow(QMainWindow):
     def __init__(self, initial_path=None):
@@ -25,63 +38,72 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1200, 800)
 
         self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
-        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
+        logger.info(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
-        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
-        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
+        # self.is_updating_from_network = False # Moved to CollaborationService
+        self.network_manager = NetworkManager(self)
+        # self.is_host = False # Moved to CollaborationService
+        # self.has_control = False # Moved to CollaborationService
+        self.recent_projects = [] # UserSessionCoordinator takes this reference
 
-        self.is_updating_from_network = False # Flag to prevent echo loop
-
-        self.network_manager = NetworkManager(self) # Initialize NetworkManager
-
-        # State variables for collaborative editing
-        self.is_host = False
-        self.has_control = False # True if this instance has the editing token
-        # self.tab_data_map = {} # Map to store tab-specific data (e.g., file paths) - REMOVED
-        self.recent_projects = [] # Initialize recent projects list
-
-        # Initialize new managers
         self.file_manager = FileManager(self)
         self.session_manager = SessionManager(self)
         self.process_manager = ProcessManager(self)
-
-        # For mapping editor widgets to paths and vice-versa
-        self.editor_to_path = {}
-        self.path_to_editor = {}
-
-        self.current_run_mode = "Run" # Initial run mode
-        self.setup_status_bar() # Initialize status bar labels first
-        self.setup_toolbar() # Re-enable toolbar for the new button
-        # Initialize DebugManager
         self.debug_manager = DebugManager(self)
-        self.debug_manager.session_started.connect(self._on_debug_session_started)
-        self.debug_manager.session_stopped.connect(self._on_debug_session_stopped)
-        self.debug_manager.paused.connect(self._on_debugger_paused)
-        self.debug_manager.resumed.connect(self._on_debugger_resumed)
-        self.setup_debugger_toolbar() # Add this line
+
+        self.editor_to_path = {} # EditorFileCoordinator takes this reference
+        self.path_to_editor = {} # EditorFileCoordinator takes this reference
+
+        config_mgr = ConfigManager()
+        self.extension_to_language_map_config = config_mgr.load_setting('extension_to_language_map', DEFAULT_EXTENSION_TO_LANGUAGE_MAP)
+        if self.extension_to_language_map_config is DEFAULT_EXTENSION_TO_LANGUAGE_MAP:
+            logger.info("Using default EXTENSION_TO_LANGUAGE_MAP as it was not found in settings.")
+        else:
+            logger.info("Loaded EXTENSION_TO_LANGUAGE_MAP from settings.")
+
+        # self.current_run_mode = "Run" # Moved to ExecutionCoordinator
+        # self.active_breakpoints = {} # Moved to ExecutionCoordinator
+
+        # Instantiate Coordinators
+        self.editor_file_coordinator = EditorFileCoordinator(self)
+        self.user_session_coordinator = UserSessionCoordinator(self)
+        self.collaboration_service = CollaborationService(self)
+        self.execution_coordinator = ExecutionCoordinator(self)
+
+        self.setup_status_bar()
+        self.setup_toolbar()
+        self.command_output_viewer = CommandOutputViewer(self) # Instantiate CommandOutputViewer
+
+        # Connect DebugManager signals to ExecutionCoordinator
+        self.debug_manager.session_started.connect(self.execution_coordinator._on_debug_session_started)
+        self.debug_manager.session_stopped.connect(self.execution_coordinator._on_debug_session_stopped)
+        self.debug_manager.paused.connect(self.execution_coordinator._on_debugger_paused)
+        self.debug_manager.resumed.connect(self.execution_coordinator._on_debugger_resumed)
+        self.setup_debugger_toolbar()
+
         self.setup_ui()
         self.setup_menu()
-        self.setup_network_connections() # Setup network signals and slots
+        self.setup_network_connections()
 
-        # Connect FileManager signals
-        self.file_manager.file_opened.connect(self._handle_file_opened)
-        self.file_manager.file_open_error.connect(self._handle_file_open_error)
-        self.file_manager.dirty_status_changed.connect(self._handle_dirty_status_changed)
-        self.file_manager.file_saved.connect(self._handle_file_saved)
-        self.file_manager.file_save_error.connect(self._handle_file_save_error)
+        # Connect FileManager signals to EditorFileCoordinator or MainWindow
+        self.file_manager.file_opened.connect(self.editor_file_coordinator._handle_file_opened)
+        self.file_manager.file_open_error.connect(self.editor_file_coordinator._handle_file_open_error)
+        self.file_manager.dirty_status_changed.connect(self._handle_dirty_status_changed) # Stays in MainWindow
+        self.file_manager.file_saved.connect(self.editor_file_coordinator._handle_file_saved)
+        self.file_manager.file_save_error.connect(self.editor_file_coordinator._handle_file_save_error)
 
-        # Connect SessionManager signals
-        self.session_manager.session_loaded.connect(self._handle_session_loaded)
-        self.session_manager.session_saved.connect(self._handle_session_saved_confirmation)
-        self.session_manager.session_error.connect(self._handle_session_error)
+        # Connect SessionManager signals to UserSessionCoordinator
+        self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded)
+        self.session_manager.session_saved.connect(self.user_session_coordinator._handle_session_saved_confirmation)
+        self.session_manager.session_error.connect(self.user_session_coordinator._handle_session_error)
 
-        # Connect ProcessManager signals
-        self.process_manager.output_received.connect(self._handle_process_output)
-        self.process_manager.process_started.connect(self._handle_process_started)
-        self.process_manager.process_finished.connect(self._handle_process_finished)
-        self.process_manager.process_error.connect(self._handle_process_error)
+        # Connect ProcessManager signals to ExecutionCoordinator
+        self.process_manager.output_received.connect(self.execution_coordinator._handle_process_output)
+        self.process_manager.process_started.connect(self.execution_coordinator._handle_process_started)
+        self.process_manager.process_finished.connect(self.execution_coordinator._handle_process_finished)
+        self.process_manager.process_error.connect(self.execution_coordinator._handle_process_error)
 
-        self.update_ui_for_control_state() # Initial UI update
+        self.update_ui_for_control_state()
 
         # Initialize active editor undo stack reference
         self._active_editor_undo_stack = None
@@ -93,10 +115,9 @@ class MainWindow(QMainWindow):
             self.redo_action.setEnabled(False)
 
         # Session loading logic revised:
-        self.pending_initial_path = initial_path # Store for _handle_session_loaded
-        self.session_manager.load_session() # Triggers signal which calls _handle_session_loaded
-
-        self.active_breakpoints = {} # Stores path -> set of line numbers
+        self.pending_initial_path = initial_path
+        self.session_manager.load_session()
+        # active_breakpoints moved to ExecutionCoordinator
 
 
     def setup_debugger_toolbar(self):
@@ -141,10 +162,8 @@ class MainWindow(QMainWindow):
         """
         if path is None:
             # This is a client-only startup.
-            # Open a single, empty "Untitled" tab.
-            self.open_new_tab() # Use open_new_tab which handles None path for untitled
-            # Hide the file explorer as there is no project context.
-            if hasattr(self, 'left_dock_widget'): # Check if left_dock_widget exists
+            self.editor_file_coordinator.open_new_tab() # Call coordinator
+            if hasattr(self, 'left_dock_widget'):
                 self.left_dock_widget.setVisible(False)
             return # Stop further processing
 
@@ -159,19 +178,17 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
-                self.add_recent_project(path) # Add to recent projects
+                self.user_session_coordinator.add_recent_project(path) # Call coordinator
         elif os.path.isfile(path):
             parent_dir = os.path.dirname(path)
             if parent_dir:
                 self.file_explorer.set_root_path(parent_dir)
-                # Ensure file explorer is visible
                 if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
-                    self.add_recent_project(parent_dir) # Add parent directory to recent projects
+                    self.user_session_coordinator.add_recent_project(parent_dir) # Call coordinator
             else:
-                # If it's a file in the current working directory with no parent_dir
                 current_dir = os.getcwd()
                 self.file_explorer.set_root_path(current_dir)
                 # Ensure file explorer is visible
@@ -179,10 +196,10 @@ class MainWindow(QMainWindow):
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
-                    self.add_recent_project(current_dir) # Add current directory to recent projects
-            self.open_new_tab(path) # Use open_new_tab which handles file opening
+                    self.user_session_coordinator.add_recent_project(current_dir) # Call coordinator
+            self.editor_file_coordinator.open_new_tab(path) # Call coordinator
         else:
-            print(f"Warning: Provided path is neither a file nor a directory: {path}")
+            logger.warning(f"Provided path is neither a file nor a directory: {path}")
             # Fallback to default behavior if path is invalid
             default_path = os.path.expanduser("~")
             self.file_explorer.set_root_path(default_path)
@@ -191,13 +208,12 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
-                self.add_recent_project(default_path) # Add default path to recent projects
+                self.user_session_coordinator.add_recent_project(default_path) # Call coordinator
         
     def setup_ui(self):
-        # Central Editor View (QTabWidget)
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.tab_widget.tabCloseRequested.connect(self.editor_file_coordinator.close_tab) # Connect to coordinator
         self.setCentralWidget(self.tab_widget)
         self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
         self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions
@@ -227,9 +243,8 @@ class MainWindow(QMainWindow):
         self.debugger_main_widget = debugger_main_widget
 
         # --- File Explorer Setup (modified for tabbing) ---
-        self.file_explorer = FileExplorer() # Create the FileExplorer widget instance
-        # Connect FileExplorer's file_opened signal to MainWindow's open_new_tab method
-        self.file_explorer.file_opened.connect(self.open_new_tab)
+        self.file_explorer = FileExplorer()
+        self.file_explorer.file_opened.connect(self.editor_file_coordinator.open_new_tab) # Connect to coordinator
         self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
 
@@ -249,8 +264,16 @@ class MainWindow(QMainWindow):
         
         # Add the new InteractiveTerminal widget directly to the dock
         self.terminal_widget = InteractiveTerminal(self)
-        self.terminal_dock.setWidget(self.terminal_widget)
+        # self.terminal_dock.setWidget(self.terminal_widget) # Old way
+
+        # New Tabbed Dock for Terminal and Output
+        self.bottom_dock_tab_widget = QTabWidget()
+        self.bottom_dock_tab_widget.addTab(self.terminal_widget, "Shell")
+        self.bottom_dock_tab_widget.addTab(self.command_output_viewer, "Output")
+
+        self.terminal_dock.setWidget(self.bottom_dock_tab_widget) # Set new tab widget
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+
 
     # _open_file_in_new_tab is removed as its functionality is now handled by
     # file_manager.open_file() and the _handle_file_opened slot.
@@ -260,27 +283,15 @@ class MainWindow(QMainWindow):
 
         # File Menu
         file_menu = menu_bar.addMenu("&File")
-        new_file_action = QAction("&New File", self)
-        new_file_action.setShortcut("Ctrl+N")
-        new_file_action.triggered.connect(self.create_new_file)
-        file_menu.addAction(new_file_action)
-
-        save_file_action = QAction("&Save", self)
-        save_file_action.setShortcut("Ctrl+S")
-        save_file_action.triggered.connect(self.save_current_file)
-        file_menu.addAction(save_file_action)
-
-        save_file_as_action = QAction("Save &As...", self)
-        save_file_as_action.setShortcut("Ctrl+Shift+S")
-        save_file_as_action.triggered.connect(self.save_current_file_as)
-        file_menu.addAction(save_file_as_action)
-
-        open_file_action = QAction("&Open File...", self)
-        open_file_action.setShortcut("Ctrl+Shift+O")
-        open_file_action.triggered.connect(self.open_file)
-        file_menu.addAction(open_file_action)
-
-        open_folder_action = QAction("&Open Folder...", self)
+        new_file_action = QAction("&New File", self); new_file_action.setShortcut("Ctrl+N")
+        new_file_action.triggered.connect(self.editor_file_coordinator.create_new_file); file_menu.addAction(new_file_action)
+        save_file_action = QAction("&Save", self); save_file_action.setShortcut("Ctrl+S")
+        save_file_action.triggered.connect(self.editor_file_coordinator.save_current_file); file_menu.addAction(save_file_action)
+        save_file_as_action = QAction("Save &As...", self); save_file_as_action.setShortcut("Ctrl+Shift+S")
+        save_file_as_action.triggered.connect(self.editor_file_coordinator.save_current_file_as); file_menu.addAction(save_file_as_action)
+        open_file_action = QAction("&Open File...", self); open_file_action.setShortcut("Ctrl+Shift+O")
+        open_file_action.triggered.connect(self.editor_file_coordinator.open_file); file_menu.addAction(open_file_action)
+        open_folder_action = QAction("&Open Folder...", self) # Remains in MainWindow
         open_folder_action.setShortcut("Ctrl+O")
         open_folder_action.triggered.connect(self.open_folder)
         file_menu.addAction(open_folder_action)
@@ -326,49 +337,50 @@ class MainWindow(QMainWindow):
 
         # Session Menu
         session_menu = menu_bar.addMenu("&Session")
-        self.start_host_action = QAction("Start &Hosting Session", self)
-        self.start_host_action.setShortcut("Ctrl+H")
-        self.start_host_action.triggered.connect(self.start_hosting_session)
+        self.start_host_action = QAction("Start &Hosting Session", self); self.start_host_action.setShortcut("Ctrl+H")
+        self.start_host_action.triggered.connect(self.collaboration_service.start_hosting_session) # Connect to service
         session_menu.addAction(self.start_host_action)
-
-        self.connect_host_action = QAction("&Connect to Host...", self)
-        self.connect_host_action.setShortcut("Ctrl+J")
-        self.connect_host_action.triggered.connect(self.connect_to_host_session)
+        self.connect_host_action = QAction("&Connect to Host...", self); self.connect_host_action.setShortcut("Ctrl+J")
+        self.connect_host_action.triggered.connect(self.collaboration_service.connect_to_host_session) # Connect to service
         session_menu.addAction(self.connect_host_action)
-
-        self.stop_session_action = QAction("&Stop Current Session", self)
-        self.stop_session_action.setShortcut("Ctrl+T")
-        self.stop_session_action.triggered.connect(self.stop_current_session)
+        self.stop_session_action = QAction("&Stop Current Session", self); self.stop_session_action.setShortcut("Ctrl+T")
+        self.stop_session_action.triggered.connect(self.collaboration_service.stop_current_session) # Connect to service
         session_menu.addAction(self.stop_session_action)
 
     def _update_recent_menu(self):
         self.recent_projects_menu.clear()
-        if not self.recent_projects:
-            placeholder_action = QAction("No Recent Projects", self)
-            placeholder_action.setEnabled(False)
-            self.recent_projects_menu.addAction(placeholder_action)
+        # Use user_session_coordinator's recent_projects list
+        if not self.user_session_coordinator.recent_projects:
+            placeholder = QAction("No Recent Projects", self); placeholder.setEnabled(False)
+            self.recent_projects_menu.addAction(placeholder)
         else:
-            for project_path in self.recent_projects:
-                action = QAction(project_path, self)
-                action.triggered.connect(lambda checked, path=project_path: self.initialize_project(path))
+            for path in self.user_session_coordinator.recent_projects: # Iterate coordinator's list
+                action = QAction(path, self)
+                action.triggered.connect(lambda checked, p=path: self.initialize_project(p))
                 self.recent_projects_menu.addAction(action)
             self.recent_projects_menu.addSeparator()
             clear_action = QAction("Clear Recent Projects", self)
-            clear_action.triggered.connect(self._clear_recent_projects)
+            clear_action.triggered.connect(self._clear_recent_projects_menu_action) # Connect to MainWindow's dialog method
             self.recent_projects_menu.addAction(clear_action)
 
+    # _handle_remove_recent_project, _handle_rename_recent_project, _update_recent_projects_from_welcome
+    # are removed from MainWindow. Their logic is in UserSessionCoordinator.
+    # WelcomeScreen signals connect to UserSessionCoordinator slots via AppController.
+    # The menu action for clearing recents (_clear_recent_projects) is now _clear_recent_projects_menu_action.
 
-    def _handle_remove_recent_project(self, path_to_remove):
-        if path_to_remove in self.recent_projects:
-            self.recent_projects.remove(path_to_remove)
-            self._update_recent_menu()
-            if hasattr(self, 'welcome_page') and self.welcome_page:
-                self.welcome_page.update_list(self.recent_projects)
-            self.save_session() # Save the updated session
+    def _clear_recent_projects_menu_action(self): # Renamed to avoid conflict if old one was slot
+        reply = QMessageBox.question(self,
+                                     "Confirm Clear",
+                                     "Are you sure you want to clear all recent projects?",
+                                     QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.user_session_coordinator.perform_clear_recent_projects_action()
+        else:
+            self.statusBar().showMessage("Clear operation cancelled.", 3000)
 
-    def _handle_rename_recent_project(self, old_path):
-        new_path, ok = QInputDialog.getText(self, "Rename Recent Project",
-                                            f"Enter new path for '{old_path}':",
+    def setup_toolbar(self):
+        toolbar = self.addToolBar("Main Toolbar")
                                             QLineEdit.Normal, old_path)
         if ok and new_path:
             if new_path != old_path:
@@ -408,9 +420,8 @@ class MainWindow(QMainWindow):
 
         # Run Action Button
         self.run_action_button = QAction(QIcon.fromTheme("media-playback-start"), "Run Code (F5)", self)
-        self.run_action_button.setToolTip("Run Code (F5)")
-        self.run_action_button.setShortcut("F5") # Kept F5 for simple run
-        self.run_action_button.triggered.connect(self._handle_run_request)
+        self.run_action_button.setToolTip("Run Code (F5)"); self.run_action_button.setShortcut("F5")
+        self.run_action_button.triggered.connect(self.execution_coordinator._handle_run_request) # Connect to coordinator
         toolbar.addAction(self.run_action_button)
 
         # Debug Action Button
@@ -423,19 +434,17 @@ class MainWindow(QMainWindow):
             elif QIcon.hasThemeIcon("system-run"): # Fallback if debug-run not found
                  debug_icon = QIcon.fromTheme("system-run")
         except Exception as e:
-            print(f"Could not load debug icon: {e}")
+            logger.warning(f"Could not load debug icon: {e}", exc_info=True)
 
         self.debug_action_button = QAction(debug_icon, "Debug Code (Ctrl+F5)", self)
-        self.debug_action_button.setToolTip("Debug Code (Ctrl+F5)")
-        self.debug_action_button.setShortcut("Ctrl+F5") # New shortcut for debug
-        self.debug_action_button.triggered.connect(self._handle_debug_request)
+        self.debug_action_button.setToolTip("Debug Code (Ctrl+F5)"); self.debug_action_button.setShortcut("Ctrl+F5")
+        self.debug_action_button.triggered.connect(self.execution_coordinator._handle_debug_request) # Connect to coordinator
         toolbar.addAction(self.debug_action_button)
 
         # Add other buttons to the toolbar
         self.request_control_button = QPushButton("Request Control", self)
-        self.request_control_button.clicked.connect(self.request_control)
-        toolbar.addWidget(self.request_control_button)
-        self.request_control_button.setEnabled(False) # Initially disabled
+        self.request_control_button.clicked.connect(self.collaboration_service.request_control) # Connect to service
+        toolbar.addWidget(self.request_control_button); self.request_control_button.setEnabled(False)
 
         # AI Assistant Button
         self.ai_assistant_button = QPushButton("AI Assistant", self)
@@ -465,34 +474,20 @@ class MainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.git_branch_label)
 
     def setup_network_connections(self):
-        self.network_manager.data_received.connect(self.on_network_data_received)
+        # Connect to CollaborationService slots
+        self.network_manager.data_received.connect(self.collaboration_service.on_network_data_received)
         self.network_manager.status_changed.connect(self.status_bar.showMessage)
-        self.network_manager.peer_connected.connect(self.on_peer_connected)
-        self.network_manager.peer_disconnected.connect(self.on_peer_disconnected)
+        self.network_manager.peer_connected.connect(self.collaboration_service.on_peer_connected)
+        self.network_manager.peer_disconnected.connect(self.collaboration_service.on_peer_disconnected)
         
-        # New signals for control management
-        self.network_manager.control_request_received.connect(self.on_control_request_received)
-        self.network_manager.control_granted.connect(self.on_control_granted)
-        self.network_manager.control_revoked.connect(self.on_control_revoked)
-        
-        # New signals for control management
-        self.network_manager.control_request_received.connect(self.on_control_request_received)
-        self.network_manager.control_granted.connect(self.on_control_granted)
-        self.network_manager.control_declined.connect(self.on_control_declined) # Connect new signal
-        self.network_manager.control_revoked.connect(self.on_control_revoked)
+        self.network_manager.control_request_received.connect(self.collaboration_service.on_control_request_received)
+        self.network_manager.control_granted.connect(self.collaboration_service.on_control_granted)
+        self.network_manager.control_declined.connect(self.collaboration_service.on_control_declined)
+        self.network_manager.control_revoked.connect(self.collaboration_service.on_control_revoked)
 
-    EXTENSION_TO_LANGUAGE = {
-        ".py": "Python",
-        ".js": "JavaScript",
-        ".cpp": "C++",
-        ".cxx": "C++",
-        ".c": "C",
-        ".java": "Java",
-        ".html": "HTML",
-        ".txt": "Plain Text"
-    }
+    # EXTENSION_TO_LANGUAGE is now loaded from ConfigManager into self.extension_to_language_map_config
 
-    RUNNER_CONFIG = {
+    RUNNER_CONFIG = { # This RUNNER_CONFIG in MainWindow is effectively dead code now, ExecutionCoordinator loads its own.
         "Python": ["python", "-u", "{file}"],
         # Simplified C++ command: just compile. Running the output file would be a separate step.
         # This is a temporary adjustment due to ProcessManager not handling '&&' or shell chains directly.
@@ -534,7 +529,7 @@ class MainWindow(QMainWindow):
 
             if file_path and not file_path.startswith("untitled:"):
                 file_extension = os.path.splitext(file_path)[1].lower()
-                detected_language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
+                detected_language = self.extension_to_language_map_config.get(file_extension, "Plain Text")
                 idx = self.language_selector.findText(detected_language)
                 if idx != -1:
                     self.language_selector.setCurrentIndex(idx)
@@ -560,8 +555,8 @@ class MainWindow(QMainWindow):
 
             # Update breakpoint display for the current editor if it's a CodeEditor
             if isinstance(editor, CodeEditor):
-                file_path = editor.file_path # Relies on CodeEditor having file_path property
-                current_file_breakpoints = self.active_breakpoints.get(file_path, set())
+                file_path = editor.file_path
+                current_file_breakpoints = self.execution_coordinator.active_breakpoints.get(file_path, set()) # Use ExecutionCoordinator
                 editor.gutter.update_breakpoints_display(current_file_breakpoints)
             # If not a CodeEditor, no gutter to update.
 
@@ -575,10 +570,11 @@ class MainWindow(QMainWindow):
     @Slot()
     def on_text_editor_changed(self):
         current_editor = self._get_current_code_editor()
-        if not current_editor or self.is_updating_from_network:
+        # Use collaboration_service's flag for network updates.
+        if not current_editor or self.collaboration_service.is_updating_from_network:
             return
 
-        path = self.editor_to_path.get(current_editor)
+        path = self.editor_file_coordinator.editor_to_path.get(current_editor) # Use EFC map
         if not path:
             # Handle untitled tabs or errors
             if current_editor.toPlainText(): # If there's any text, it's dirty from its initial state
@@ -592,99 +588,17 @@ class MainWindow(QMainWindow):
         # For tracked files, delegate to FileManager
         self.file_manager.update_file_content_changed(path, current_editor.toPlainText())
         
-        # Network sync logic (keep as is for now)
-        if self.network_manager.is_connected() and self.has_control and not current_editor.isReadOnly():
-            text = current_editor.toPlainText()
-            self.network_manager.send_data('TEXT_UPDATE', text) # This part remains
+        # Network sync logic uses collaboration_service state
+        if self.collaboration_service.is_connected() and self.collaboration_service.has_control and not current_editor.isReadOnly():
+            self.network_manager.send_data(NetworkMessageType.TEXT_UPDATE, current_editor.toPlainText())
         
         self._update_undo_redo_actions()
 
-    @Slot(str)
-    def on_network_data_received(self, data):
-        print(f"8. Editor update slot called. Received data parameter: {data[:50]}...")
-        current_editor = self._get_current_code_editor() # Use helper
-        if current_editor:
-            try:
-                # The data parameter is already the content string, not the full JSON message.
-                # No need to json.loads() here.
-                content = data
-                print(f"LOG: MainWindow.on_network_data_received - Parsed message in MainWindow: (content directly used)")
-                self.is_updating_from_network = True
-                current_cursor_pos = current_editor.textCursor().position()
-                print(f"LOG: MainWindow.on_network_data_received - Setting text: {content[:50]}...")
-                current_editor.setPlainText(content)
-                cursor = current_editor.textCursor()
-                cursor.setPosition(current_cursor_pos)
-                current_editor.setTextCursor(cursor)
-                self.is_updating_from_network = False
-                self._update_undo_redo_actions() # Update after network change
-            except Exception as e:
-                print(f"LOG: MainWindow.on_network_data_received - Error processing received data: {e}")
-        print("LOG: MainWindow.on_network_data_received - Exit")
+    # All collaboration related slots are now in CollaborationService.
 
-    @Slot()
-    def on_peer_connected(self):
-        self.status_bar.showMessage("Peer connected!")
-        QMessageBox.information(self, "Connection Status", "Peer connected successfully!")
-        self.start_host_action.setEnabled(False)
-        self.connect_host_action.setEnabled(False)
-        self.stop_session_action.setEnabled(True)
-        self.update_ui_for_control_state() # Update UI after connection
-        print(f"LOG: on_peer_connected - is_host={self.is_host}, has_control={self.has_control}")
-
-    @Slot()
-    def on_peer_disconnected(self):
-        self.status_bar.showMessage("Peer disconnected.")
-        QMessageBox.warning(self, "Connection Status", "Peer disconnected.")
-        self.start_host_action.setEnabled(True)
-        self.connect_host_action.setEnabled(True)
-        self.stop_session_action.setEnabled(False)
-        self.is_host = False
-        self.has_control = False
-        self.update_ui_for_control_state() # Reset UI after disconnection
-        print(f"LOG: on_peer_disconnected - is_host={self.is_host}, has_control={self.has_control}")
-
-    @Slot()
-    def start_hosting_session(self):
-        ip, port = ConnectionDialog.get_details(self)
-        if ip and port:
-            if self.network_manager.start_hosting(port):
-                self.status_bar.showMessage(f"Hosting on port {port}...")
-                self.start_host_action.setEnabled(False)
-                self.connect_host_action.setEnabled(False)
-                self.stop_session_action.setEnabled(True)
-                self.is_host = True
-                self.has_control = True # Host starts with control
-                self.update_ui_for_control_state()
-                print(f"LOG: start_hosting_session - is_host={self.is_host}, has_control={self.has_control}")
-            else:
-                QMessageBox.critical(self, "Error", "Failed to start hosting session.")
-
-    @Slot()
-    def connect_to_host_session(self):
-        ip, port = ConnectionDialog.get_details(self)
-        if ip and port:
-            self.network_manager.connect_to_host(ip, port)
-            self.status_bar.showMessage(f"Connecting to {ip}:{port}...")
-            self.start_host_action.setEnabled(False)
-            self.connect_host_action.setEnabled(False)
-            self.stop_session_action.setEnabled(True)
-            self.is_host = False
-            self.has_control = False # Client starts without control
-            self.update_ui_for_control_state()
-            print(f"LOG: connect_to_host_session - is_host={self.is_host}, has_control={self.has_control}")
-
-    @Slot()
-    def stop_current_session(self):
-        self.network_manager.stop_session()
-        self.status_bar.showMessage("Session stopped.")
-        self.start_host_action.setEnabled(True)
-        self.connect_host_action.setEnabled(True)
-        self.stop_session_action.setEnabled(False)
-        self.is_host = False
-        self.has_control = False
-        self.update_ui_for_control_state() # Reset UI after session stop
-        print(f"LOG: stop_current_session - is_host={self.is_host}, has_control={self.has_control}")
+    # _handle_run_request and _handle_debug_request are now in ExecutionCoordinator.
+    # ProcessManager and DebugManager signal handlers (_handle_process_..., _on_debug_...) are in ExecutionCoordinator.
+    # _handle_breakpoint_toggled is in ExecutionCoordinator.
 
     @Slot(int, int)
     def _update_cursor_position_label(self, line, column):
@@ -719,11 +633,13 @@ class MainWindow(QMainWindow):
             return
 
         _, extension = os.path.splitext(file_path)
-        language_name = self.EXTENSION_TO_LANGUAGE.get(extension.lower())
+        # Ensure this uses the loaded config, though this method itself is likely dead code
+        language_name = self.extension_to_language_map_config.get(extension.lower())
         if not language_name:
             QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
+        # This RUNNER_CONFIG is also local to MainWindow and likely dead code. ExecutionCoordinator uses its own loaded version.
         command_template_list = self.RUNNER_CONFIG.get(language_name)
         if not command_template_list:
             QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
@@ -749,244 +665,49 @@ class MainWindow(QMainWindow):
     def update_editor_read_only_state(self):
         current_editor = self._get_current_code_editor()
         if current_editor:
-            if self.network_manager.is_connected():
-                # Editor is read-only if we don't have control in a session
-                current_editor.setReadOnly(not self.has_control)
+            # Use collaboration_service state
+            if self.collaboration_service.is_connected(): # Use service's helper
+                current_editor.setReadOnly(not self.collaboration_service.has_control)
             else:
-                # If not in a session, editor is always writable
                 current_editor.setReadOnly(False)
 
     def update_ui_for_control_state(self):
-        # Update status bar message
-        if self.network_manager.is_connected():
-            if self.is_host:
-                if self.has_control:
-                    self.control_status_label.setText("You have editing control.")
-                else:
-                    self.control_status_label.setText("Viewer has control. Press any key to reclaim.")
-            else: # Client
-                if self.has_control:
-                    self.control_status_label.setText("You have editing control.")
-                else:
-                    self.control_status_label.setText("Viewing only. Click 'Request Control' to edit.")
-        else:
-            self.control_status_label.setText("Not in session")
-
-        # Update "Request Control" button state
-        if self.network_manager.is_connected() and not self.is_host:
-            self.request_control_button.setEnabled(not self.has_control)
-        else:
-            self.request_control_button.setEnabled(False) # Only client can request control
-
-        # Update editor read-only state
+        cs = self.collaboration_service
+        status = "Not in session"
+        if cs.is_connected():
+            if cs.is_host: status = "You have control." if cs.has_control else "Viewer has control. Press key to reclaim."
+            else: status = "You have control." if cs.has_control else "Viewing. Click 'Request Control'."
+        self.control_status_label.setText(status)
+        self.request_control_button.setEnabled(cs.is_connected() and not cs.is_host and not cs.has_control)
         self.update_editor_read_only_state()
-        print(f"LOG: update_ui_for_control_state - is_host={self.is_host}, has_control={self.has_control}, editor_read_only={self._get_current_code_editor().isReadOnly() if self._get_current_code_editor() else 'N/A'}")
+        # editor_read_only_status = self._get_current_code_editor().isReadOnly() if self._get_current_code_editor() else 'N/A'
+        # print(f"LOG: update_ui_for_control_state - is_host={cs.is_host}, has_control={cs.has_control}, editor_read_only={editor_read_only_status}")
 
-    @Slot()
-    def request_control(self):
-        if not self.is_host and not self.has_control and self.network_manager.is_connected():
-            self.network_manager.send_data('REQ_CONTROL')
-            self.status_bar.showMessage("Requesting control...")
-            self.request_control_button.setEnabled(False) # Disable button after request
-            print(f"LOG: request_control - is_host={self.is_host}, has_control={self.has_control}")
+    # Methods moved to EditorFileCoordinator:
+    # _get_next_untitled_name, open_new_tab, _handle_file_opened, _handle_file_open_error,
+    # close_tab, create_new_file, open_file,
+    # _save_file, save_current_file, save_current_file_as,
+    # _handle_file_saved, _handle_file_save_error.
 
-    @Slot()
-    def on_control_request_received(self):
-        if self.is_host and self.has_control: # Host has control and client requests it
-            reply = QMessageBox.question(self, "Control Request",
-                                         "The client has requested editing control. Grant control?",
-                                         QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.network_manager.send_data('GRANT_CONTROL')
-                self.has_control = False
-                self.update_ui_for_control_state()
-                self.status_bar.showMessage("Control granted to client.")
-            else:
-                self.network_manager.send_data('DECLINE_CONTROL')
-                self.status_bar.showMessage("Control request declined.")
+    # Methods moved to UserSessionCoordinator:
+    # save_session (MainWindow version now delegates to coordinator),
+    # _handle_session_loaded (MainWindow version is now a shell for pending_initial_path),
+    # _handle_session_saved_confirmation, _handle_session_error,
+    # add_recent_project (MainWindow version now delegates to coordinator),
+    # _clear_recent_projects (MainWindow version shows dialog then calls coordinator's core logic),
+    # _rename_recent_project, _remove_recent_project, _update_recent_projects_from_welcome (these are removed, WelcomeScreen connects to coordinator)
 
-    @Slot()
-    def on_control_granted(self):
-        if not self.is_host: # Only client receives this
-            self.has_control = True
-            self.update_ui_for_control_state()
-            self.status_bar.showMessage("You have been granted editing control.")
-            print(f"LOG: on_control_granted - is_host={self.is_host}, has_control={self.has_control}")
+    # Methods moved to CollaborationService:
+    # start_hosting_session, connect_to_host_session, stop_current_session,
+    # on_network_data_received, on_peer_connected, on_peer_disconnected,
+    # request_control, on_control_request_received, on_control_granted,
+    # on_control_declined, on_control_revoked, on_host_reclaim_control.
 
-    @Slot()
-    def on_control_declined(self):
-        if not self.is_host: # Only client receives this
-            self.status_bar.showMessage("Host declined the request.", 3000) # Show for 3 seconds
-            self.request_control_button.setEnabled(True) # Re-enable button
-
-    @Slot()
-    def on_control_revoked(self):
-        if not self.is_host: # Only client receives this
-            self.has_control = False
-            self.update_ui_for_control_state()
-            self.status_bar.showMessage("Editing control has been revoked.")
-            print(f"LOG: on_control_revoked - is_host={self.is_host}, has_control={self.has_control}")
-
-    @Slot()
-    def on_host_reclaim_control(self):
-        if self.is_host and not self.has_control: # Host reclaims control
-            self.has_control = True
-            self.update_ui_for_control_state()
-            self.network_manager.send_data('REVOKE_CONTROL')
-            self.status_bar.showMessage("You have reclaimed editing control.")
-            print(f"LOG: on_host_reclaim_control - is_host={self.is_host}, has_control={self.has_control}")
-
-    def _get_next_untitled_name(self):
-        count = 1
-        while True:
-            name = f"Untitled-{count}"
-            # Check if this name is already used by a placeholder path
-            is_used = False
-            for path in self.path_to_editor.keys():
-                if path.startswith("untitled:") and os.path.basename(path) == name: # Check basename for "untitled:Untitled-N"
-                    is_used = True
-                    break
-            if not is_used:
-                return name
-            count += 1
-
-    def open_new_tab(self, file_path=None):
-        if file_path:
-            # Check if already open via path_to_editor to avoid duplicate signal emission if already there
-            if file_path in self.path_to_editor:
-                editor = self.path_to_editor[file_path]
-                # Bring tab to front
-                for i in range(self.tab_widget.count()):
-                    if self.tab_widget.widget(i) == editor:
-                        self.tab_widget.setCurrentIndex(i)
-                        return
-            self.file_manager.open_file(file_path)
-        else:
-            # Handle new, untitled file (not tracked by FileManager until first save)
-            editor = CodeEditor(self)
-            tab_title = self._get_next_untitled_name()
-            # Use a unique placeholder for untitled files in local tracking
-            # The placeholder includes "untitled:" prefix and the unique name.
-            untitled_path_placeholder = f"untitled:{tab_title}"
-
-            index = self.tab_widget.addTab(editor, tab_title)
-            self.tab_widget.setCurrentIndex(index)
-            self.tab_widget.setTabToolTip(index, tab_title) # Tooltip is just "Untitled-N"
-
-            self.editor_to_path[editor] = untitled_path_placeholder
-            self.path_to_editor[untitled_path_placeholder] = editor
-            editor.file_path = untitled_path_placeholder # For consistency with editor's own tracking
-
-            # Connect signals for this new editor
-            editor.textChanged.connect(self.on_text_editor_changed)
-            editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
-            editor.language_changed_signal.connect(self._update_language_label)
-            editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
-
-            self._update_status_bar_and_language_selector_on_tab_change(index)
-            self.update_editor_read_only_state()
-            self._update_undo_redo_actions()
-            # Mark untitled tab as dirty immediately if it has content, or if it's truly new (no content but needs saving)
-            # For a brand new untitled tab, it should show as dirty.
-            self._handle_dirty_status_changed(untitled_path_placeholder, True)
-
-            # Connect breakpoint toggled signal for new untitled editor
-            editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled)
-
-
-    @Slot(str, str) # path, content
-    def _handle_file_opened(self, path, content):
-        if path in self.path_to_editor:
-            editor = self.path_to_editor[path]
-            if editor in self.editor_to_path:
-                for i in range(self.tab_widget.count()):
-                    if self.tab_widget.widget(i) == editor:
-                        self.tab_widget.setCurrentIndex(i)
-                        # Potentially update content if it changed externally, though FileManager handles initial load
-                        # editor.setPlainText(content) # Consider if this is needed or if FM ensures latest
-                        return
-            print(f"Warning: Path {path} in path_to_editor but editor not found in tabs or editor_to_path.")
-
-        editor = CodeEditor(self)
-        editor.setPlainText(content)
-        editor.file_path = path # Important: Set file_path on editor for its own reference
-
-        editor.cursorPositionChanged.connect(lambda: self._update_cursor_position_label(
-            editor.textCursor().blockNumber() + 1,
-            editor.textCursor().columnNumber() + 1
-        ))
-
-        file_extension = os.path.splitext(path)[1].lower()
-        language = self.EXTENSION_TO_LANGUAGE.get(file_extension, "Plain Text")
-        editor.set_file_path_and_update_language(path)
-
-        tab_name = os.path.basename(path)
-        new_tab_index = self.tab_widget.addTab(editor, tab_name)
-        self.tab_widget.setCurrentIndex(new_tab_index)
-        self.tab_widget.setTabToolTip(new_tab_index, path)
-
-        self.editor_to_path[editor] = path
-        self.path_to_editor[path] = editor
-
-        editor.textChanged.connect(self.on_text_editor_changed)
-        editor.cursor_position_changed_signal.connect(self._update_cursor_position_label)
-        editor.language_changed_signal.connect(self._update_language_label)
-        editor.control_reclaim_requested.connect(self.on_host_reclaim_control)
-        editor.breakpoint_toggled.connect(self._handle_breakpoint_toggled) # Connect signal
-
-        self._update_status_bar_and_language_selector_on_tab_change(new_tab_index)
-        self.update_editor_read_only_state()
-        self._update_undo_redo_actions()
-        self.status_bar.showMessage(f"Opened {path}", 2000)
-
-    @Slot(int)
-    def _handle_breakpoint_toggled(self, line_number):
-        editor = self._get_current_code_editor()
-        if not editor:
-            return
-
-        # Use the file_path property from the CodeEditor (QWidget)
-        file_path = editor.file_path
-
-        if not file_path or file_path.startswith("untitled:"):
-            QMessageBox.warning(self, "Breakpoints", "Please save the file before setting breakpoints.")
-            return
-
-        if file_path not in self.active_breakpoints:
-            self.active_breakpoints[file_path] = set()
-
-        if line_number in self.active_breakpoints[file_path]:
-            self.active_breakpoints[file_path].remove(line_number)
-        else:
-            self.active_breakpoints[file_path].add(line_number)
-
-        # Update the Breakpoints Panel
-        self.breakpoints_panel.clear()
-        for path, lines in self.active_breakpoints.items():
-            if not lines: # Skip if no lines for this path, or if lines is None
-                continue
-            path_basename = os.path.basename(path) # Get basename for display
-            for line in sorted(list(lines)):
-                self.breakpoints_panel.addItem(QListWidgetItem(f"{path_basename}:{line}"))
-
-        # Trigger gutter re-render on the current editor's gutter
-        editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set()))
-
-        # Also update DebugManager's internal list and the adapter if a session is active
-        lines_for_file = self.active_breakpoints.get(file_path, set())
-        self.debug_manager.update_internal_breakpoints(file_path, lines_for_file)
-
-        # Check if DAP client is connected and handshake is complete before sending to adapter
-        if self.debug_manager.dap_client and \
-           self.debug_manager.dap_client.isOpen() and \
-           self.debug_manager._dap_request_pending_response.get('handshake_complete', False):
-            self.debug_manager.set_breakpoints_on_adapter(file_path, list(lines_for_file))
-
-
-    @Slot(str, str) # path, error_message
-    def _handle_file_open_error(self, path, error_message):
-        QMessageBox.critical(self, "Error Opening File", f"Could not open file '{path}':\n{error_message}")
-        self.status_bar.showMessage(f"Error opening {path}", 5000)
+    # Methods moved to ExecutionCoordinator:
+    # _handle_run_request, _handle_debug_request,
+    # _handle_process_output, _handle_process_started, _handle_process_finished, _handle_process_error,
+    # _on_debug_session_started, _on_debug_session_stopped, _on_debugger_paused, _on_debugger_resumed,
+    # _handle_breakpoint_toggled.
 
     @Slot(str, bool) # path, is_dirty
     def _handle_dirty_status_changed(self, path, is_dirty):
@@ -1016,9 +737,9 @@ class MainWindow(QMainWindow):
                         if current_tab_text.endswith("*"):
                              self.tab_widget.setTabText(tab_index, current_tab_text[:-1])
             else:
-                print(f"Warning: dirty_status_changed for untracked untitled path: {path}")
+                logger.warning(f"Dirty status changed for untracked untitled path: {path}")
         else:
-            print(f"Warning: dirty_status_changed for untracked path: {path}")
+            logger.warning(f"Dirty status changed for untracked path: {path}")
 
     def open_folder(self):
         dialog = QFileDialog(self)
@@ -1225,7 +946,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
                 return False
             except Exception as e:
-                print(f"Warning: Black formatting failed (non-syntax error), saving unformatted: {e}")
+                logger.warning(f"Black formatting failed (non-syntax error), saving unformatted: {e}", exc_info=True)
         
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.file_manager.save_file(editor, content_to_save, path_to_save)
@@ -1235,7 +956,7 @@ class MainWindow(QMainWindow):
     @Slot(object, str, str) # widget_ref (editor), saved_path, saved_content
     def _handle_file_saved(self, editor_widget, saved_path, saved_content):
         if editor_widget not in self.editor_to_path:
-            print(f"Warning: _handle_file_saved received widget_ref not in editor_to_path map.")
+            logger.warning(f"_handle_file_saved received editor_widget not in editor_to_path map. Path: {saved_path}")
             # This could happen if a new untitled file was saved.
             # Or if the editor_widget reference passed by FileManager isn't the one we have.
             # Assuming editor_widget is the correct CodeEditor instance passed to save_file.
@@ -1430,7 +1151,7 @@ class MainWindow(QMainWindow):
             if os.path.exists(path):
                 self.file_manager.open_file(path) # This triggers _handle_file_opened
             else:
-                print(f"Warning: File path from session not found, skipping: {path}")
+                logger.warning(f"File path from session not found, skipping: {path}")
 
         # Process pending_initial_path after session files are potentially opened
         if self.pending_initial_path:
@@ -1470,7 +1191,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str) # error_message
     def _handle_session_error(self, error_message):
-        print(f"MainWindow: Session error: {error_message}")
+        logger.error(f"MainWindow: Session error: {error_message}")
         QMessageBox.warning(self, "Session Error", error_message)
         self.status_bar.showMessage(f"Session error: {error_message}", 5000)
 
@@ -1693,7 +1414,7 @@ class MainWindow(QMainWindow):
             self.terminal_widget.append_output(output_str)
             self.terminal_dock.show()
         else:
-            print(f"Process Output (no terminal_widget): {output_str}")
+            logger.info(f"Process Output (no terminal_widget or command_output_viewer): {output_str}") # Adjusted message
 
     @Slot()
     def _handle_process_started(self):
@@ -1839,7 +1560,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_debug_session_started(self):
-        print("MainWindow: Debug session started.")
+        logger.info("MainWindow: Debug session started.")
         self.debugger_toolbar.setVisible(True)
         self.run_action_button.setEnabled(False)
         self.debug_action_button.setEnabled(False)
@@ -1854,7 +1575,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_debug_session_stopped(self):
-        print("MainWindow: Debug session stopped.")
+        logger.info("MainWindow: Debug session stopped.")
         self.debugger_toolbar.setVisible(False)
         self.run_action_button.setEnabled(True)
         self.debug_action_button.setEnabled(True)
@@ -1873,7 +1594,7 @@ class MainWindow(QMainWindow):
 
     @Slot(int, str, list, list)
     def _on_debugger_paused(self, thread_id: int, reason: str, call_stack: list, variables: list):
-        print(f"MainWindow: Debugger paused. Thread: {thread_id}, Reason: {reason}")
+        logger.info(f"MainWindow: Debugger paused. Thread: {thread_id}, Reason: {reason}")
 
         self.call_stack_panel.clear()
         for frame in call_stack:
@@ -1934,7 +1655,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_debugger_resumed(self):
-        print("MainWindow: Debugger resumed.")
+        logger.info("MainWindow: Debugger resumed.")
         # Clear variable and call stack panels as the program is running
         self.variables_panel.clear()
         self.variables_panel.addTopLevelItem(QTreeWidgetItem(self.variables_panel, ["Running..."]))
