@@ -1,11 +1,13 @@
 from PySide6.QtCore import QObject, Signal, Slot, QByteArray
-from PySide6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
+from PySide6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress # Reverted imports
 import json
 import logging
 from enum import Enum
-from typing import Any, cast # Added for type hints
+from typing import Any, cast # Keep cast for sender() if needed, Any for content
 
 logger = logging.getLogger(__name__)
+
+# SERVER_CERT_PATH and SERVER_KEY_PATH removed
 
 class NetworkMessageType(Enum):
     TEXT_UPDATE = "TEXT_UPDATE"
@@ -25,14 +27,14 @@ class NetworkManager(QObject):
     control_revoked: Signal = Signal()
 
     tcp_server: QTcpServer
-    tcp_socket: QTcpSocket
-    peer_socket: QTcpSocket | None
-    buffer: dict[QTcpSocket, str] # QTcpSocket as key
+    tcp_socket: QTcpSocket # Reverted to QTcpSocket
+    peer_socket: QTcpSocket | None # Reverted to QTcpSocket
+    buffer: dict[QTcpSocket, str] # Reverted key type
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.tcp_server = QTcpServer(self)
-        self.tcp_socket = QTcpSocket(self)
+        self.tcp_socket = QTcpSocket(self) # Reverted to QTcpSocket
         self.peer_socket = None
         self.buffer = {}
 
@@ -40,6 +42,9 @@ class NetworkManager(QObject):
         self.tcp_socket.connected.connect(self._on_connected)
         self.tcp_socket.disconnected.connect(self._on_disconnected)
         self.tcp_socket.readyRead.connect(self._read_data)
+        # Removed sslErrors and encrypted signal connections
+
+    # Removed _load_server_certificate, _load_private_key, _on_ssl_errors, _on_encrypted_successfully
 
     def start_hosting(self, port: int) -> bool:
         if self.tcp_server.isListening():
@@ -56,12 +61,12 @@ class NetworkManager(QObject):
             return False
 
     def connect_to_host(self, ip: str, port: int) -> None:
-        if self.tcp_socket.state() == QTcpSocket.ConnectedState:
+        if self.tcp_socket.state() == QTcpSocket.ConnectedState: # QTcpSocket.ConnectedState is fine
             self.status_changed.emit("Already connected to a host.")
             return
         
         self.status_changed.emit(f"Connecting to {ip}:{port}...")
-        self.tcp_socket.connectToHost(ip, port)
+        self.tcp_socket.connectToHost(ip, port) # Reverted to connectToHost
 
     def stop_session(self) -> None:
         if self.tcp_server.isListening():
@@ -81,15 +86,16 @@ class NetworkManager(QObject):
     @Slot()
     def _on_new_connection(self) -> None:
         if self.peer_socket:
-            new_socket: QTcpSocket | None = self.tcp_server.nextPendingConnection()
-            if new_socket:
-                new_socket.disconnectFromHost()
-                new_socket.waitForDisconnected(1000)
+            raw_socket_reject: QTcpSocket | None = self.tcp_server.nextPendingConnection()
+            if raw_socket_reject:
+                raw_socket_reject.disconnectFromHost()
+                raw_socket_reject.waitForDisconnected(1000)
             self.status_changed.emit("Rejected new connection: already have a peer.")
             return
 
+        # Simplified: directly assign to self.peer_socket
         self.peer_socket = self.tcp_server.nextPendingConnection()
-        if self.peer_socket: # nextPendingConnection can return None
+        if self.peer_socket:
             self.peer_socket.readyRead.connect(self._read_data)
             self.peer_socket.disconnected.connect(self._on_peer_disconnected)
             self.status_changed.emit(f"Peer connected from {self.peer_socket.peerAddress().toString()}:{self.peer_socket.peerPort()}")
@@ -102,6 +108,7 @@ class NetworkManager(QObject):
     @Slot()
     def _on_connected(self) -> None:
         self.status_changed.emit(f"Connected to host {self.tcp_socket.peerAddress().toString()}:{self.tcp_socket.peerPort()}")
+        # Removed startClientEncryption and related logging
         self.peer_connected.emit()
         self.buffer[self.tcp_socket] = ""
 
@@ -115,7 +122,7 @@ class NetworkManager(QObject):
     @Slot()
     def _on_peer_disconnected(self) -> None:
         if self.peer_socket:
-            if self.peer_socket in self.buffer: # Check before deleting socket
+            if self.peer_socket in self.buffer:
                 del self.buffer[self.peer_socket]
             self.peer_socket.deleteLater()
             self.peer_socket = None
@@ -125,6 +132,7 @@ class NetworkManager(QObject):
     @Slot()
     def _read_data(self) -> None:
         sender_obj: QObject | None = self.sender()
+        # Check for QTcpSocket as it's reverted
         if not isinstance(sender_obj, QTcpSocket):
             logger.warning(f"_read_data called by non-QTcpSocket sender: {type(sender_obj)}")
             return
@@ -132,7 +140,7 @@ class NetworkManager(QObject):
         sender_socket: QTcpSocket = cast(QTcpSocket, sender_obj)
 
         raw_data_qba: QByteArray = sender_socket.readAll()
-        raw_data_bytes: bytes = raw_data_qba.data() # Get bytes from QByteArray
+        raw_data_bytes: bytes = raw_data_qba.data()
 
         decoded_data: str = raw_data_bytes.decode('utf-8', errors='ignore')
         logger.debug(f"readyRead triggered. Received raw data: {decoded_data}")
@@ -165,7 +173,7 @@ class NetworkManager(QObject):
                     logger.warning(f"Unknown message type received: {msg_type}")
             except json.JSONDecodeError:
                 logger.error(f"Received non-JSON data or incomplete JSON in buffer: '{message_str}'", exc_info=True)
-            except Exception: # General exception for other processing errors
+            except Exception:
                 logger.exception("Error processing received data from buffer")
 
     def send_data(self, message_type: NetworkMessageType, content: Any = None) -> None:
@@ -178,7 +186,8 @@ class NetworkManager(QObject):
         data_qba: QByteArray = QByteArray(json_message.encode('utf-8'))
         logger.debug(f"Formatting message: {json_message.strip()}")
  
-        target_socket: QTcpSocket | None = None
+        target_socket: QTcpSocket | None = None # Reverted to QTcpSocket
+        # QTcpSocket.ConnectedState is appropriate here
         if self.tcp_socket and self.tcp_socket.state() == QTcpSocket.ConnectedState:
             target_socket = self.tcp_socket
         elif self.peer_socket and self.peer_socket.state() == QTcpSocket.ConnectedState:
@@ -197,5 +206,6 @@ class NetworkManager(QObject):
         logger.debug("send_data - Exit")
 
     def is_connected(self) -> bool:
+        # QTcpSocket.ConnectedState is appropriate here
         return self.tcp_socket.state() == QTcpSocket.ConnectedState or \
                (self.peer_socket is not None and self.peer_socket.state() == QTcpSocket.ConnectedState)

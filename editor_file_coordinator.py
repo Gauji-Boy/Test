@@ -2,33 +2,49 @@ import os
 import json
 import black
 import logging
-from PySide6.QtCore import QObject, Slot, QStandardPaths, Qt # Added Qt for Qt.WaitCursor
+from PySide6.QtCore import QObject, Slot, QStandardPaths, Qt
 from PySide6.QtWidgets import QWidget, QFileDialog, QMessageBox, QApplication, QLineEdit, QInputDialog
-# To avoid circular import, 'MainWindow' type hint is as string.
-# from main_window import MainWindow # This would be circular.
 from code_editor import CodeEditor
-from typing import Any # Added for type hints
+from typing import Any, TYPE_CHECKING, Optional # Added TYPE_CHECKING and Optional
+
+if TYPE_CHECKING:
+    from main_window import MainWindow # Assuming main_window.py
 
 logger = logging.getLogger(__name__)
 
 class EditorFileCoordinator(QObject):
-    main_win: 'MainWindow' # Forward reference for MainWindow
+    main_win: Optional['MainWindow'] # Forward reference for MainWindow, now Optional
     editor_to_path: dict[CodeEditor, str]
     path_to_editor: dict[str, CodeEditor]
 
-    def __init__(self, main_window: 'MainWindow') -> None:
+    def __init__(self) -> None: # Removed main_window parameter
         super().__init__()
+        self.main_win = None # Initialize as None
+        # These will be initialized in set_main_window_ref
+        self.editor_to_path = {}
+        self.path_to_editor = {}
+
+    def set_main_window_ref(self, main_window: 'MainWindow') -> None:
         self.main_win = main_window
-        # These will be populated by MainWindow after its own dicts are initialized
-        self.editor_to_path = main_window.editor_to_path
-        self.path_to_editor = main_window.path_to_editor
+        # Initialize attributes that depend on main_window
+        if self.main_win: # Ensure main_win is set before accessing its attributes
+            self.editor_to_path = self.main_win.editor_to_path
+            self.path_to_editor = self.main_win.path_to_editor
+        else: # Should not happen if called correctly, but good for safety
+            self.editor_to_path = {}
+            self.path_to_editor = {}
+
 
     def _save_file(self, index: int, save_as: bool = False) -> bool:
+        if not self.main_win:
+            logger.error("MainWindow reference not set in EditorFileCoordinator.")
+            return False
+
         editor_widget: QWidget | None = self.main_win.tab_widget.widget(index)
         if not isinstance(editor_widget, CodeEditor):
             return False
 
-        editor: CodeEditor = editor_widget # Now we know it's a CodeEditor
+        editor: CodeEditor = editor_widget
 
         current_path_placeholder: str | None = self.editor_to_path.get(editor)
         content_to_save: str = editor.toPlainText()
@@ -42,12 +58,11 @@ class EditorFileCoordinator(QObject):
                 suggested_fn_base = os.path.basename(current_path_placeholder)
 
             full_suggested_path: str = os.path.join(suggested_dir, suggested_fn_base)
-            # QFileDialog.getSaveFileName returns a tuple (filePath, selectedFilter)
             new_path_tuple: tuple[str, str] = QFileDialog.getSaveFileName(self.main_win, "Save File As", full_suggested_path,
                 "All Files (*);;Python Files (*.py);;C++ Files (*.cpp *.cxx *.h *.hpp);;Text Files (*.txt)")
             new_path: str = new_path_tuple[0]
             if not new_path:
-                self.main_win.status_bar.showMessage("Save cancelled.", 3000)
+                if self.main_win: self.main_win.status_bar.showMessage("Save cancelled.", 3000)
                 return False
             path_to_save = new_path
         else:
@@ -55,50 +70,52 @@ class EditorFileCoordinator(QObject):
 
         if not path_to_save:
             logger.error("No path for saving determined during _save_file.")
-            QMessageBox.critical(self.main_win, "Save Error", "No path for saving.")
+            if self.main_win: QMessageBox.critical(self.main_win, "Save Error", "No path for saving.")
             return False
 
         if path_to_save.lower().endswith(".py"):
             try:
                 formatted_content: str = black.format_str(content_to_save, mode=black.FileMode())
                 if formatted_content != content_to_save:
-                    self.main_win.collaboration_service.is_updating_from_network = True
+                    if self.main_win: self.main_win.collaboration_service.is_updating_from_network = True
                     cursor_pos: int = editor.textCursor().position()
                     editor.setPlainText(formatted_content)
                     new_cursor = editor.textCursor()
                     new_cursor.setPosition(min(cursor_pos, len(formatted_content)))
                     editor.setTextCursor(new_cursor)
-                    self.main_win.collaboration_service.is_updating_from_network = False
+                    if self.main_win: self.main_win.collaboration_service.is_updating_from_network = False
                     content_to_save = formatted_content
             except black.parsing.LibCSTError as e:
                 logger.error(f"Syntax error during Black formatting: {e}", exc_info=True)
-                QMessageBox.critical(self.main_win, "Format Error", f"Syntax error:\n{e}")
+                if self.main_win: QMessageBox.critical(self.main_win, "Format Error", f"Syntax error:\n{e}")
                 return False
             except Exception as e:
                 logger.error(f"Black formatting failed: {e}", exc_info=True)
 
-        QApplication.setOverrideCursor(Qt.WaitCursor) # Qt.WaitCursor needs Qt import
-        self.main_win.file_manager.save_file(editor, content_to_save, path_to_save)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if self.main_win: self.main_win.file_manager.save_file(editor, content_to_save, path_to_save)
         QApplication.restoreOverrideCursor()
         return True
 
     def save_current_file(self) -> bool:
+        if not self.main_win: return False
         idx: int = self.main_win.tab_widget.currentIndex()
         if idx == -1:
-            self.main_win.status_bar.showMessage("No active editor.")
+            if self.main_win: self.main_win.status_bar.showMessage("No active editor.")
             return False
         return self._save_file(idx)
 
     def save_current_file_as(self) -> bool:
+        if not self.main_win: return False
         idx: int = self.main_win.tab_widget.currentIndex()
         if idx == -1:
-            self.main_win.status_bar.showMessage("No active editor.")
+            if self.main_win: self.main_win.status_bar.showMessage("No active editor.")
             return False
         return self._save_file(idx, save_as=True)
 
     @Slot(object, str, str)
     def _handle_file_saved(self, editor_widget: QWidget, saved_path: str, saved_content: str) -> None:
-        # editor_widget is expected to be a CodeEditor instance.
+        if not self.main_win: return
         if not isinstance(editor_widget, CodeEditor):
             logger.warning(f"_handle_file_saved called with non-CodeEditor widget: {type(editor_widget)}")
             return
@@ -112,7 +129,7 @@ class EditorFileCoordinator(QObject):
 
         self.editor_to_path[editor_widget] = saved_path
         self.path_to_editor[saved_path] = editor_widget
-        editor_widget.file_path = saved_path # Update CodeEditor's internal path
+        editor_widget.file_path = saved_path
 
         idx: int = self.main_win.tab_widget.indexOf(editor_widget)
         if idx != -1:
@@ -124,12 +141,13 @@ class EditorFileCoordinator(QObject):
 
     @Slot(object, str, str)
     def _handle_file_save_error(self, widget: QWidget, path: str, error: str) -> None:
-        # widget is expected to be a CodeEditor instance.
+        if not self.main_win: return
         logger.error(f"Error saving file '{path}': {error}")
         QMessageBox.critical(self.main_win, "Save Error", f"Could not save '{path}':\n{error}")
         self.main_win.status_bar.showMessage(f"Save error for {path}", 5000)
 
     def open_file(self) -> None:
+        if not self.main_win: return
         dialog = QFileDialog(self.main_win)
         dialog.setFileMode(QFileDialog.ExistingFile)
         if dialog.exec():
@@ -144,12 +162,9 @@ class EditorFileCoordinator(QObject):
             if not any(p.startswith("untitled:") and os.path.basename(p) == name for p in self.path_to_editor.keys()):
                 return name
             count += 1
-        # This part of the code should be unreachable due to the loop structure,
-        # but linters might complain if 'name' is not guaranteed to be defined after the loop.
-        # However, the loop is infinite until a name is found.
-        # logger.debug(f"Generated new untitled name: {name}")
 
     def open_new_tab(self, file_path: str | None = None) -> None:
+        if not self.main_win: return
         if file_path:
             logger.info(f"Opening new tab for file: {file_path}")
             if file_path in self.path_to_editor:
@@ -162,7 +177,7 @@ class EditorFileCoordinator(QObject):
             self.main_win.file_manager.open_file(file_path)
         else:
             logger.info("Opening new untitled tab.")
-            editor = CodeEditor(self.main_win) # main_win is 'MainWindow'
+            editor = CodeEditor(self.main_win)
             title: str = self._get_next_untitled_name()
             placeholder_path: str = f"untitled:{title}"
             logger.debug(f"Untitled tab placeholder path: {placeholder_path}")
@@ -173,7 +188,7 @@ class EditorFileCoordinator(QObject):
 
             self.editor_to_path[editor] = placeholder_path
             self.path_to_editor[placeholder_path] = editor
-            editor.file_path = placeholder_path # Set file_path on the CodeEditor instance
+            editor.file_path = placeholder_path
 
             editor.textChanged.connect(self.main_win.on_text_editor_changed)
             editor.cursor_position_changed_signal.connect(self.main_win._update_cursor_position_label)
@@ -188,6 +203,7 @@ class EditorFileCoordinator(QObject):
 
     @Slot(str, str)
     def _handle_file_opened(self, path: str, content: str) -> None:
+        if not self.main_win: return
         if path in self.path_to_editor:
             editor: CodeEditor = self.path_to_editor[path]
             idx: int = self.main_win.tab_widget.indexOf(editor)
@@ -197,13 +213,12 @@ class EditorFileCoordinator(QObject):
                 return
 
         logger.info(f"Handling file opened: {path}")
-        editor = CodeEditor(self.main_win) # main_win is 'MainWindow'
+        editor = CodeEditor(self.main_win)
         editor.setPlainText(content)
-        editor.file_path = path # Set file_path on the CodeEditor instance
+        editor.file_path = path
 
-        # Lambda for cursor position: types are (lambda: None)
         editor.cursorPositionChanged.connect(lambda: self.main_win._update_cursor_position_label(
-            editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1))
+            editor.textCursor().blockNumber() + 1, editor.textCursor().columnNumber() + 1) if self.main_win else None)
         editor.set_file_path_and_update_language(path)
 
         idx = self.main_win.tab_widget.addTab(editor, os.path.basename(path))
@@ -226,12 +241,14 @@ class EditorFileCoordinator(QObject):
 
     @Slot(str, str)
     def _handle_file_open_error(self, path: str, error: str) -> None:
+        if not self.main_win: return
         logger.error(f"Error opening file '{path}': {error}")
         QMessageBox.critical(self.main_win, "Open Error", f"Could not open '{path}':\n{error}")
         self.main_win.status_bar.showMessage(f"Error opening {path}", 5000)
 
     def get_active_file_path(self) -> str | None:
-        editor: CodeEditor | None = self.main_win._get_current_code_editor() # _get_current_code_editor returns CodeEditor | None
+        if not self.main_win: return None
+        editor: CodeEditor | None = self.main_win._get_current_code_editor()
         if editor:
             path: str | None = self.editor_to_path.get(editor)
             if path and not path.startswith("untitled:"):
@@ -239,6 +256,7 @@ class EditorFileCoordinator(QObject):
         return None
 
     def close_tab(self, index: int | None = None) -> None:
+        if not self.main_win: return
         idx_to_close: int = self.main_win.tab_widget.currentIndex() if index is None else index
         if idx_to_close == -1:
             return
@@ -247,7 +265,7 @@ class EditorFileCoordinator(QObject):
         if not widget:
             return
 
-        path_for_editor: str | None = self.editor_to_path.get(widget) # type: ignore # widget might not be CodeEditor initially
+        path_for_editor: str | None = self.editor_to_path.get(widget) # type: ignore
         proceed: bool = True
 
         if path_for_editor:
@@ -267,7 +285,7 @@ class EditorFileCoordinator(QObject):
 
         if isinstance(widget, CodeEditor):
             try: widget.textChanged.disconnect(self.main_win.on_text_editor_changed)
-            except RuntimeError: pass # Signal not connected or already disconnected
+            except RuntimeError: pass
             try: widget.control_reclaim_requested.disconnect(self.main_win.collaboration_service.on_host_reclaim_control)
             except RuntimeError: pass
             try: widget.cursor_position_changed_signal.disconnect(self.main_win._update_cursor_position_label)
@@ -289,11 +307,11 @@ class EditorFileCoordinator(QObject):
         self.main_win.tab_widget.removeTab(idx_to_close)
 
     def create_new_file(self) -> None:
-        # sel_idx type can be QModelIndex
+        if not self.main_win: return
         sel_idx = self.main_win.file_explorer.selectionModel().currentIndex()
         target_dir: str | None = None
         if sel_idx.isValid():
-            selected_path = self.main_win.file_explorer.model.filePath(sel_idx)
+            selected_path: str = self.main_win.file_explorer.model.filePath(sel_idx)
             if os.path.isdir(selected_path):
                 target_dir = selected_path
             else:
@@ -306,7 +324,6 @@ class EditorFileCoordinator(QObject):
             QMessageBox.critical(self.main_win, "Error", "Cannot determine target directory.")
             return
 
-        # QInputDialog.getText returns tuple (text, ok_bool)
         name_tuple: tuple[str, bool] = QInputDialog.getText(self.main_win, "New File", "File name:", QLineEdit.Normal, "")
         name: str = name_tuple[0]
         ok: bool = name_tuple[1]
@@ -333,3 +350,5 @@ class EditorFileCoordinator(QObject):
         except Exception as e:
             logger.error(f"Unexpected error creating file '{fpath}': {e}", exc_info=True)
             QMessageBox.critical(self.main_win, "Error", f"Unexpected error: {e}")
+
+# Ensure a newline at the end of the file

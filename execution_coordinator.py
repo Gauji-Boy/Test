@@ -2,32 +2,32 @@ import os
 import logging
 from PySide6.QtCore import QObject, Slot, QProcess
 from PySide6.QtWidgets import QMessageBox, QListWidgetItem, QTreeWidgetItem
-# from main_window import MainWindow # Avoid circular import
-# from editor_file_coordinator import EditorFileCoordinator # Avoid circular import
 from code_editor import CodeEditor
 from config_manager import ConfigManager
 from config import RUNNER_CONFIG as DEFAULT_RUNNER_CONFIG
 from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP
-from typing import Any, cast # Added for type hints
+from typing import Any, cast, TYPE_CHECKING, Optional # Added TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from main_window import MainWindow # Assuming main_window.py
 
 logger = logging.getLogger(__name__)
 
 class ExecutionCoordinator(QObject):
-    main_win: 'MainWindow' # Forward reference
+    main_win: Optional['MainWindow'] # Forward reference, now Optional
     active_breakpoints: dict[str, set[int]]
-    current_run_mode: str # "Run" or "Debug"
+    current_run_mode: str
     config_manager: ConfigManager
     runner_config: dict[str, Any]
     extension_to_language_map: dict[str, str]
 
-    def __init__(self, main_window: 'MainWindow') -> None:
+    def __init__(self) -> None: # Removed main_window parameter
         super().__init__()
-        self.main_win = main_window
-        # Takes ownership from MainWindow
-        self.active_breakpoints = main_window.active_breakpoints
-        self.current_run_mode = main_window.current_run_mode
+        self.main_win = None # Initialize as None
+        self.active_breakpoints = {} # Initialize as empty
+        self.current_run_mode = "Run" # Default value
 
-        self.config_manager = ConfigManager()
+        self.config_manager = ConfigManager() # This can be initialized without main_win
         self.runner_config = self.config_manager.load_setting('runner_config', DEFAULT_RUNNER_CONFIG)
         if self.runner_config is DEFAULT_RUNNER_CONFIG:
             logger.info("Using default RUNNER_CONFIG as it was not found in settings.")
@@ -40,8 +40,23 @@ class ExecutionCoordinator(QObject):
         else:
             logger.info("Loaded EXTENSION_TO_LANGUAGE_MAP from settings.")
 
+    def set_main_window_ref(self, main_window: 'MainWindow') -> None:
+        self.main_win = main_window
+        if self.main_win:
+            # Initialize attributes that depend on main_window
+            self.active_breakpoints = self.main_win.active_breakpoints
+            self.current_run_mode = self.main_win.current_run_mode
+        else: # Should not happen
+            self.active_breakpoints = {}
+            self.current_run_mode = "Run"
+
+
     @Slot()
     def _handle_run_request(self) -> None:
+        if not self.main_win:
+            logger.error("ExecutionCoordinator: MainWindow reference not set.")
+            return
+
         editor: CodeEditor | None = self.main_win._get_current_code_editor()
         if not editor:
             self.main_win.status_bar.showMessage("No active editor to run.", 3000)
@@ -85,6 +100,10 @@ class ExecutionCoordinator(QObject):
 
     @Slot()
     def _handle_debug_request(self) -> None:
+        if not self.main_win:
+            logger.error("ExecutionCoordinator: MainWindow reference not set.")
+            return
+
         editor: CodeEditor | None = self.main_win._get_current_code_editor()
         if not editor:
             QMessageBox.information(self.main_win, "Debug", "No active editor to debug.")
@@ -99,16 +118,15 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Debug", "Save operation cancelled or failed. Debug aborted.")
             return
 
-        # Ensure all paths in active_breakpoints are absolute, though they should be already
         for path, lines_set in self.active_breakpoints.items():
             self.main_win.debug_manager.update_internal_breakpoints(path, lines_set)
 
-        # file_path here must be valid and not None due to earlier checks
         self.main_win.debug_manager.start_session(cast(str, file_path))
 
 
     @Slot(str)
     def _handle_process_output(self, output_str: str) -> None:
+        if not self.main_win: return
         if hasattr(self.main_win, 'command_output_viewer') and self.main_win.command_output_viewer:
             self.main_win.command_output_viewer.append_output(output_str)
             if hasattr(self.main_win, 'bottom_dock_tab_widget'):
@@ -118,6 +136,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot()
     def _handle_process_started(self) -> None:
+        if not self.main_win: return
         logger.info("Process started.")
         self.main_win.status_bar.showMessage("Process started...")
         if hasattr(self.main_win, 'run_action_button'):
@@ -135,6 +154,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot(int, QProcess.ExitStatus)
     def _handle_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        if not self.main_win: return
         status_text: str = "successfully" if exit_status == QProcess.NormalExit and exit_code == 0 else f"with errors (code: {exit_code})"
         message: str = f"Process finished {status_text}."
         logger.info(message)
@@ -148,6 +168,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot(str)
     def _handle_process_error(self, error_message: str) -> None:
+        if not self.main_win: return
         full_error_message: str = f"Process error: {error_message}"
         logger.error(f"Process execution error: {error_message}")
         QMessageBox.critical(self.main_win, "Process Error", full_error_message)
@@ -163,6 +184,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot()
     def _on_debug_session_started(self) -> None:
+        if not self.main_win: return
         logger.info("Debug session started.")
         self.main_win.debugger_toolbar.setVisible(True)
         if hasattr(self.main_win, 'run_action_button'): self.main_win.run_action_button.setEnabled(False)
@@ -176,6 +198,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot()
     def _on_debug_session_stopped(self) -> None:
+        if not self.main_win: return
         logger.info("Debug session stopped.")
         self.main_win.debugger_toolbar.setVisible(False)
         if hasattr(self.main_win, 'run_action_button'): self.main_win.run_action_button.setEnabled(True)
@@ -185,12 +208,14 @@ class ExecutionCoordinator(QObject):
         self.main_win.variables_panel.addTopLevelItem(QTreeWidgetItem(self.main_win.variables_panel, ["Locals"]))
         self.main_win.call_stack_panel.clear()
 
-        for editor in self.main_win.editor_file_coordinator.path_to_editor.values():
-            if isinstance(editor, CodeEditor):
-                editor.set_exec_highlight(None)
+        if self.main_win.editor_file_coordinator: # Check if coordinator exists
+            for editor in self.main_win.editor_file_coordinator.path_to_editor.values():
+                if isinstance(editor, CodeEditor):
+                    editor.set_exec_highlight(None)
 
-    @Slot(int, str, list, list) # Types for call_stack and variables are list[dict[str,Any]]
+    @Slot(int, str, list, list)
     def _on_debugger_paused(self, thread_id: int, reason: str, call_stack: list[dict[str, Any]], variables: list[dict[str, Any]]) -> None:
+        if not self.main_win: return
         logger.info(f"Debugger paused. Thread: {thread_id}, Reason: {reason}")
         self.main_win.call_stack_panel.clear()
         for frame in call_stack:
@@ -234,6 +259,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot()
     def _on_debugger_resumed(self) -> None:
+        if not self.main_win: return
         logger.info("Debugger resumed.")
         self.main_win.variables_panel.clear()
         self.main_win.variables_panel.addTopLevelItem(QTreeWidgetItem(self.main_win.variables_panel, ["Running..."]))
@@ -252,6 +278,7 @@ class ExecutionCoordinator(QObject):
 
     @Slot(int)
     def _handle_breakpoint_toggled(self, line_number: int) -> None:
+        if not self.main_win: return
         editor: CodeEditor | None = self.main_win._get_current_code_editor()
         if not editor:
             return
@@ -261,6 +288,7 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Breakpoints", "Please save the file before setting breakpoints.")
             return
 
+        # Ensure file_path is a valid key before proceeding
         if file_path not in self.active_breakpoints:
             self.active_breakpoints[file_path] = set()
 
@@ -280,11 +308,13 @@ class ExecutionCoordinator(QObject):
         editor.gutter.update_breakpoints_display(self.active_breakpoints.get(file_path, set()))
 
         lines_for_file: set[int] = self.active_breakpoints.get(file_path, set())
-        # Ensure file_path is not None before passing to update_internal_breakpoints
-        if file_path:
+
+        if file_path: # Ensure file_path is not None
             self.main_win.debug_manager.update_internal_breakpoints(file_path, lines_for_file)
 
             if self.main_win.debug_manager.dap_client and \
                self.main_win.debug_manager.dap_client.isOpen() and \
                self.main_win.debug_manager._dap_request_pending_response.get('handshake_complete', False):
                 self.main_win.debug_manager.set_breakpoints_on_adapter(file_path, list(lines_for_file))
+
+# Ensure a newline at the end of the file

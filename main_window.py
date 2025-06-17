@@ -18,8 +18,9 @@ from editor_file_coordinator import EditorFileCoordinator
 from user_session_coordinator import UserSessionCoordinator
 from collaboration_service import CollaborationService
 from execution_coordinator import ExecutionCoordinator
-from config_manager import ConfigManager # Added
-from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP # Added
+from config_manager import ConfigManager
+from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP
+from typing import Optional # Added
 
 import logging
 import tempfile
@@ -29,13 +30,24 @@ import shutil # For rmtree
 import json # Import json for structured messages
 import black # Import black for synchronous formatting
 
-logger = logging.getLogger(__name__) # Added
+logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
-    def __init__(self, initial_path=None):
+    def __init__(self,
+                 editor_file_coordinator: EditorFileCoordinator,
+                 user_session_coordinator: UserSessionCoordinator,
+                 collaboration_service: CollaborationService,
+                 execution_coordinator: ExecutionCoordinator,
+                 initial_path: Optional[str] = None) -> None:
         super().__init__()
         self.setWindowTitle("Aether Editor")
         self.setGeometry(100, 100, 1200, 800)
+
+        # Assign passed-in coordinators
+        self.editor_file_coordinator = editor_file_coordinator
+        self.user_session_coordinator = user_session_coordinator
+        self.collaboration_service = collaboration_service
+        self.execution_coordinator = execution_coordinator
 
         self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
         logger.info(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
@@ -64,11 +76,11 @@ class MainWindow(QMainWindow):
         # self.current_run_mode = "Run" # Moved to ExecutionCoordinator
         # self.active_breakpoints = {} # Moved to ExecutionCoordinator
 
-        # Instantiate Coordinators
-        self.editor_file_coordinator = EditorFileCoordinator(self)
-        self.user_session_coordinator = UserSessionCoordinator(self)
-        self.collaboration_service = CollaborationService(self)
-        self.execution_coordinator = ExecutionCoordinator(self)
+        # Instantiate Coordinators - REMOVED
+        # self.editor_file_coordinator = EditorFileCoordinator(self)
+        # self.user_session_coordinator = UserSessionCoordinator(self)
+        # self.collaboration_service = CollaborationService(self)
+        # self.execution_coordinator = ExecutionCoordinator(self)
 
         self.setup_status_bar()
         self.setup_toolbar()

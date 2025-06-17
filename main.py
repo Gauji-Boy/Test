@@ -9,13 +9,46 @@ setup_logging(level=logging.DEBUG, log_to_file=True) # Or logging.INFO
 
 from main_window import MainWindow
 from welcome_screen import WelcomeScreen
+from editor_file_coordinator import EditorFileCoordinator
+from user_session_coordinator import UserSessionCoordinator
+from collaboration_service import CollaborationService
+from execution_coordinator import ExecutionCoordinator
 
 class AppController:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.main_window = MainWindow() # Do not show yet
-        self.welcome_screen = WelcomeScreen(recent_projects=self.main_window.recent_projects)
-        self.main_window.welcome_page = self.welcome_screen # Pass the welcome_screen instance to main_window
+
+        # Create coordinator instances
+        self.editor_file_coordinator = EditorFileCoordinator()
+        self.user_session_coordinator = UserSessionCoordinator()
+        self.collaboration_service = CollaborationService()
+        self.execution_coordinator = ExecutionCoordinator()
+
+        # Instantiate MainWindow and inject coordinators
+        self.main_window = MainWindow(
+            editor_file_coordinator=self.editor_file_coordinator,
+            user_session_coordinator=self.user_session_coordinator,
+            collaboration_service=self.collaboration_service,
+            execution_coordinator=self.execution_coordinator
+            # initial_path is handled by launch_main_window or similar methods
+        )
+
+        # Provide MainWindow reference to coordinators
+        self.editor_file_coordinator.set_main_window_ref(self.main_window)
+        self.user_session_coordinator.set_main_window_ref(self.main_window)
+        self.collaboration_service.set_main_window_ref(self.main_window)
+        self.execution_coordinator.set_main_window_ref(self.main_window)
+
+        # WelcomeScreen setup
+        # Note: main_window.recent_projects is accessed after user_session_coordinator is set up in MainWindow
+        # and its set_main_window_ref is called, which initializes recent_projects.
+        # This assumes UserSessionCoordinator's recent_projects is initialized correctly after set_main_window_ref.
+        # If UserSessionCoordinator.recent_projects is only valid *after* its set_main_window_ref,
+        # then WelcomeScreen might need to be initialized after set_main_window_ref calls.
+        # For now, assuming main_window.recent_projects (which is UserSessionCoordinator.recent_projects)
+        # is valid for WelcomeScreen here.
+        self.welcome_screen = WelcomeScreen(recent_projects=self.main_window.user_session_coordinator.recent_projects)
+        self.main_window.welcome_page = self.welcome_screen
 
         # Connect signals
         self.welcome_screen.path_selected.connect(self.launch_main_window)

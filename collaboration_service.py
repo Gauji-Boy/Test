@@ -1,38 +1,45 @@
 import logging
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtWidgets import QMessageBox
-# Assuming ConnectionDialog is in a separate file or accessible
 from connection_dialog import ConnectionDialog
 from network_manager import NetworkMessageType
-# from main_window import MainWindow # Avoid circular import
-# from editor_file_coordinator import EditorFileCoordinator # Avoid circular import
-from code_editor import CodeEditor # For type hint in on_network_data_received
+from code_editor import CodeEditor
+from typing import TYPE_CHECKING, Optional # Added
+
+if TYPE_CHECKING:
+    from main_window import MainWindow # Assuming main_window.py
 
 logger = logging.getLogger(__name__)
 
 class CollaborationService(QObject):
-    main_win: 'MainWindow' # Forward reference for MainWindow
+    main_win: Optional['MainWindow'] # Forward reference, now Optional
     is_host: bool
     has_control: bool
     is_updating_from_network: bool
 
-    def __init__(self, main_window: 'MainWindow') -> None:
+    def __init__(self) -> None: # Removed main_window parameter
         super().__init__()
-        self.main_win = main_window
+        self.main_win = None # Initialize as None
         self.is_host = False
         self.has_control = False
         self.is_updating_from_network = False
 
+    def set_main_window_ref(self, main_window: 'MainWindow') -> None:
+        self.main_win = main_window
+        # No other initializations depended on main_window in the original __init__
+
     def is_connected(self) -> bool:
+        if not self.main_win: return False
         return self.main_win.network_manager.is_connected()
 
     @Slot()
     def start_hosting_session(self) -> None:
+        if not self.main_win: return
         ip_port_tuple: tuple[str | None, int | None] = ConnectionDialog.get_details(self.main_win)
         ip: str | None = ip_port_tuple[0]
         port: int | None = ip_port_tuple[1]
 
-        if ip and port is not None: # Ensure port is not None explicitly
+        if ip and port is not None:
             if self.main_win.network_manager.start_hosting(port):
                 self.main_win.status_bar.showMessage(f"Hosting on port {port}...")
                 self.main_win.start_host_action.setEnabled(False)
@@ -48,11 +55,12 @@ class CollaborationService(QObject):
 
     @Slot()
     def connect_to_host_session(self) -> None:
+        if not self.main_win: return
         ip_port_tuple: tuple[str | None, int | None] = ConnectionDialog.get_details(self.main_win)
         ip: str | None = ip_port_tuple[0]
         port: int | None = ip_port_tuple[1]
 
-        if ip and port is not None: # Ensure port is not None explicitly
+        if ip and port is not None:
             self.main_win.network_manager.connect_to_host(ip, port)
             self.main_win.status_bar.showMessage(f"Connecting to {ip}:{port}...")
             self.main_win.start_host_action.setEnabled(False)
@@ -65,6 +73,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def stop_current_session(self) -> None:
+        if not self.main_win: return
         self.main_win.network_manager.stop_session()
         self.main_win.status_bar.showMessage("Session stopped.")
         self.main_win.start_host_action.setEnabled(True)
@@ -77,6 +86,7 @@ class CollaborationService(QObject):
 
     @Slot(str)
     def on_network_data_received(self, data: str) -> None:
+        if not self.main_win: return
         current_editor: CodeEditor | None = self.main_win.editor_file_coordinator._get_current_code_editor()
         if current_editor:
             try:
@@ -94,6 +104,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_peer_connected(self) -> None:
+        if not self.main_win: return
         self.main_win.status_bar.showMessage("Peer connected!")
         QMessageBox.information(self.main_win, "Connection Status", "Peer connected successfully!")
         self.main_win.start_host_action.setEnabled(False)
@@ -104,6 +115,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_peer_disconnected(self) -> None:
+        if not self.main_win: return
         self.main_win.status_bar.showMessage("Peer disconnected.")
         QMessageBox.warning(self.main_win, "Connection Status", "Peer disconnected.")
         self.main_win.start_host_action.setEnabled(True)
@@ -116,6 +128,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def request_control(self) -> None:
+        if not self.main_win: return
         if not self.is_host and not self.has_control and self.is_connected():
             self.main_win.network_manager.send_data(NetworkMessageType.REQ_CONTROL)
             self.main_win.status_bar.showMessage("Requesting control...")
@@ -124,6 +137,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_control_request_received(self) -> None:
+        if not self.main_win: return
         if self.is_host and self.has_control:
             reply: QMessageBox.StandardButton = QMessageBox.question(self.main_win, "Control Request",
                                          "The client has requested editing control. Grant control?",
@@ -141,6 +155,7 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_control_granted(self) -> None:
+        if not self.main_win: return
         if not self.is_host:
             self.has_control = True
             self.main_win.update_ui_for_control_state()
@@ -149,12 +164,14 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_control_declined(self) -> None:
+        if not self.main_win: return
         if not self.is_host:
             self.main_win.status_bar.showMessage("Host declined the request.", 3000)
             self.main_win.request_control_button.setEnabled(True)
 
     @Slot()
     def on_control_revoked(self) -> None:
+        if not self.main_win: return
         if not self.is_host:
             self.has_control = False
             self.main_win.update_ui_for_control_state()
@@ -163,9 +180,12 @@ class CollaborationService(QObject):
 
     @Slot()
     def on_host_reclaim_control(self) -> None:
+        if not self.main_win: return
         if self.is_host and not self.has_control:
             self.has_control = True
             self.main_win.update_ui_for_control_state()
             self.main_win.network_manager.send_data(NetworkMessageType.REVOKE_CONTROL)
             self.main_win.status_bar.showMessage("You have reclaimed editing control.")
             logger.info(f"Host reclaimed control. is_host={self.is_host}, has_control={self.has_control}")
+
+# Ensure a newline at the end of the file
