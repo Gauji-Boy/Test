@@ -1,4 +1,5 @@
 import os
+import shutil # Added for shutil.which
 from PySide6.QtCore import QObject, Signal, Slot, QProcess, QIODevice
 
 class ProcessManager(QObject):
@@ -41,18 +42,19 @@ class ProcessManager(QObject):
             # Let's assume `command_parts` is `[executable, arg1, arg2, ...] LFS
             # `start` is fine for this.
 
-            # Ensure the program exists and is executable, especially on non-Windows
-            # This is a basic check; QProcess might have more robust ways.
-            if not QProcess.findExecutable(program):
-                 if os.path.isfile(program) and os.access(program, os.X_OK):
-                     # Full path to executable might be provided
-                     pass # QProcess will try to run it
-                 else:
+            # Ensure the program exists and is executable
+            found_program_path = shutil.which(program)
+            if not found_program_path:
+                if os.path.isfile(program) and os.access(program, os.X_OK):
+                    # Full path to an executable file might be provided
+                    found_program_path = program # Use the direct path
+                else:
                     self.process_error.emit(f"Executable '{program}' not found or not executable.")
                     self.process = None
                     return
 
-            self.process.setProgram(program)
+            # Use the path found by shutil.which or the direct verified path
+            self.process.setProgram(found_program_path)
             self.process.setArguments(arguments)
 
             # Set unified channels for easier output handling if desired, or handle separately.

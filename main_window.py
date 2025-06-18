@@ -393,30 +393,6 @@ class MainWindow(QMainWindow):
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
-                                            QLineEdit.Normal, old_path)
-        if ok and new_path:
-            if new_path != old_path:
-                try:
-                    # Attempt to rename the actual folder/file if it exists
-                    if os.path.exists(old_path):
-                        os.rename(old_path, new_path)
-                        QMessageBox.information(self, "Rename Successful", f"Renamed '{old_path}' to '{new_path}'.")
-                    else:
-                        QMessageBox.warning(self, "Path Not Found", f"Original path '{old_path}' does not exist. Updating list only.")
-
-                    # Update in recent projects list
-                    if old_path in self.recent_projects:
-                        index = self.recent_projects.index(old_path)
-                        self.recent_projects[index] = new_path
-                        self._update_recent_menu()
-                        self.save_session() # Save the updated session
-                except OSError as e:
-                    QMessageBox.critical(self, "Rename Error", f"Could not rename: {e}")
-            else:
-                QMessageBox.information(self, "No Change", "New path is the same as the old path. No action taken.")
-
-    def setup_toolbar(self):
-        toolbar = self.addToolBar("Main Toolbar")
         
         # Run/Debug Dropdown Button
         # Mode Selector (QComboBox)
