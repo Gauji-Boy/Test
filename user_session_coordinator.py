@@ -20,6 +20,7 @@ class UserSessionCoordinator(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        logger.info("UserSessionCoordinator INSTANCE CREATED") # Added
         self.main_win = None
         self.recent_projects = []
 
@@ -54,12 +55,15 @@ class UserSessionCoordinator(QObject):
     @Slot(dict)
     def _handle_session_loaded(self, session_data: dict[str, Any]) -> None:
         if not self.main_win: return
+        logger.info(f"UserSessionCoordinator._handle_session_loaded CALLED. session_data recent_projects: {session_data.get('recent_projects')}") # Added
 
         self.recent_projects.clear()
         self.recent_projects.extend(session_data.get("recent_projects", []))
+        logger.info(f"UserSessionCoordinator._handle_session_loaded: self.recent_projects list AFTER extend is now: {self.recent_projects}") # Modified
         # self.recent_projects_loaded.emit(self.recent_projects) # Removed
         self.main_win._update_recent_menu()
         if self.main_win: # Added
+            logger.info(f"UserSessionCoordinator._handle_session_loaded: About to notify AppController with list: {self.recent_projects}") # Added
             self.main_win.notify_app_controller_of_recent_projects_update(self.recent_projects) # Added
 
         root_path_from_session: str | None = session_data.get("root_path")
@@ -105,8 +109,8 @@ class UserSessionCoordinator(QObject):
 
     def add_recent_project(self, path: str) -> None:
         if not self.main_win: return
-        logger.info(f"add_recent_project: Called with path: {path}")
-        logger.info(f"add_recent_project: self.recent_projects before modification: {self.recent_projects}")
+        logger.info(f"UserSessionCoordinator.add_recent_project CALLED with path: {path}") # Modified
+        logger.info(f"UserSessionCoordinator.add_recent_project: self.recent_projects BEFORE modification is: {self.recent_projects}") # Modified
         logger.info(f"add_recent_project: self.recent_projects_limit: {self.recent_projects_limit}")
 
         if path in self.recent_projects:
@@ -115,7 +119,7 @@ class UserSessionCoordinator(QObject):
         logger.info(f"add_recent_project: self.recent_projects after insertion, before trimming: {self.recent_projects}")
 
         self.recent_projects = self.recent_projects[:self.recent_projects_limit] # Modified
-        logger.info(f"add_recent_project: self.recent_projects after trimming: {self.recent_projects}")
+        logger.info(f"UserSessionCoordinator.add_recent_project: self.recent_projects AFTER trimming is: {self.recent_projects}") # Modified
 
         self.main_win._update_recent_menu()
         logger.info("add_recent_project: About to call save_session()")
