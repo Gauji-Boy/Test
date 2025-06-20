@@ -43,12 +43,14 @@ class ExecutionCoordinator(QObject):
     def set_main_window_ref(self, main_window: 'MainWindow') -> None:
         self.main_win = main_window
         if self.main_win:
-            # Initialize attributes that depend on main_window
-            self.active_breakpoints = self.main_win.active_breakpoints
-            self.current_run_mode = self.main_win.current_run_mode
-        else: # Should not happen
-            self.active_breakpoints = {}
-            self.current_run_mode = "Run"
+            # These attributes are now owned by ExecutionCoordinator and initialized in __init__.
+            # No need to copy them from main_window.
+            pass
+        else: # Should not happen if main_window is always provided correctly
+             # These are already initialized in __init__
+            # self.active_breakpoints = {}
+            # self.current_run_mode = "Run"
+            pass
 
 
     @Slot()
@@ -205,7 +207,8 @@ class ExecutionCoordinator(QObject):
         if hasattr(self.main_win, 'debug_action_button'): self.main_win.debug_action_button.setEnabled(True)
 
         self.main_win.variables_panel.clear()
-        self.main_win.variables_panel.addTopLevelItem(QTreeWidgetItem(self.main_win.variables_panel, ["Locals"]))
+        locals_item = QTreeWidgetItem(["Locals"]) # Create item without parent in constructor
+        self.main_win.variables_panel.addTopLevelItem(locals_item) # Add to panel
         self.main_win.call_stack_panel.clear()
 
         if self.main_win.editor_file_coordinator: # Check if coordinator exists
@@ -262,7 +265,8 @@ class ExecutionCoordinator(QObject):
         if not self.main_win: return
         logger.info("Debugger resumed.")
         self.main_win.variables_panel.clear()
-        self.main_win.variables_panel.addTopLevelItem(QTreeWidgetItem(self.main_win.variables_panel, ["Running..."]))
+        running_item = QTreeWidgetItem(["Running..."]) # Create item without parent
+        self.main_win.variables_panel.addTopLevelItem(running_item) # Add to panel
         self.main_win.call_stack_panel.clear()
         self.main_win.call_stack_panel.addItem(QListWidgetItem("Running..."))
 
