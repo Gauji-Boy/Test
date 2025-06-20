@@ -413,27 +413,31 @@ class MainWindow(QMainWindow):
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
-                                            QLineEdit.Normal, old_path)
-        if ok and new_path:
-            if new_path != old_path:
-                try:
-                    # Attempt to rename the actual folder/file if it exists
-                    if os.path.exists(old_path):
-                        os.rename(old_path, new_path)
-                        QMessageBox.information(self, "Rename Successful", f"Renamed '{old_path}' to '{new_path}'.")
-                    else:
-                        QMessageBox.warning(self, "Path Not Found", f"Original path '{old_path}' does not exist. Updating list only.")
-
-                    # Update in recent projects list
-                    if old_path in self.recent_projects:
-                        index = self.recent_projects.index(old_path)
-                        self.recent_projects[index] = new_path
-                        self._update_recent_menu()
-                        self.save_session() # Save the updated session
-                except OSError as e:
-                    QMessageBox.critical(self, "Rename Error", f"Could not rename: {e}")
-            else:
-                QMessageBox.information(self, "No Change", "New path is the same as the old path. No action taken.")
+        # The following lines were misplaced and caused an IndentationError.
+        # They appear to be part of a QInputDialog call and do not belong in setup_toolbar.
+        # QLineEdit.Normal, old_path)
+        # if ok and new_path:
+        #     if new_path != old_path:
+        #         try:
+        #             # Attempt to rename the actual folder/file if it exists
+        #             if os.path.exists(old_path):
+        #                 os.rename(old_path, new_path)
+        #                 QMessageBox.information(self, "Rename Successful", f"Renamed '{old_path}' to '{new_path}'.")
+        #             else:
+        #                 QMessageBox.warning(self, "Path Not Found", f"Original path '{old_path}' does not exist. Updating list only.")
+        #
+        #             # Update in recent projects list
+        #             if old_path in self.recent_projects:
+        #                 index = self.recent_projects.index(old_path)
+        #                 self.recent_projects[index] = new_path
+        # The following lines were misplaced and caused an IndentationError.
+        # They appear to be part of a QInputDialog call and do not belong in setup_toolbar.
+        #                         self._update_recent_menu()
+        #                         self.save_session() # Save the updated session
+        #                 except OSError as e:
+        #                     QMessageBox.critical(self, "Rename Error", f"Could not rename: {e}")
+        #             else:
+        #                 QMessageBox.information(self, "No Change", "New path is the same as the old path. No action taken.")
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
@@ -679,26 +683,29 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        # This RUNNER_CONFIG is also local to MainWindow and likely dead code. ExecutionCoordinator uses its own loaded version.
-        command_template_list = self.RUNNER_CONFIG.get(language_name)
-        if not command_template_list:
-            QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
-            return
+        # The RUNNER_CONFIG logic is now handled by ExecutionCoordinator.
+        # This section is likely dead code and can be removed or commented out.
+        # command_template_list = self.RUNNER_CONFIG.get(language_name)
+        # if not command_template_list:
+        #     QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
+        #     return
 
         working_dir = os.path.dirname(file_path) or os.getcwd()
         output_file_no_ext = os.path.splitext(file_path)[0]
 
-        command_parts = []
-        for part in command_template_list:
-            part = part.replace("{file}", file_path)
-            part = part.replace("{output_file}", output_file_no_ext)
-            command_parts.append(part)
-        
-        if not command_parts:
-            QMessageBox.warning(self, "Execution Error", "Command became empty after processing template.")
-            return
-
-        self.process_manager.execute(command_parts, working_dir)
+        # The command construction and execution logic is now handled by ExecutionCoordinator.
+        # This section is likely dead code and can be removed or commented out.
+        # command_parts = []
+        # for part in command_template_list:
+        #     part = part.replace("{file}", file_path)
+        #     part = part.replace("{output_file}", output_file_no_ext)
+        #     command_parts.append(part)
+        #
+        # if not command_parts:
+        #     QMessageBox.warning(self, "Execution Error", "Command became empty after processing template.")
+        #     return
+        #
+        # self.process_manager.execute(command_parts, working_dir)
 
     # _run_diagnostic_test is removed as its functionality is superseded by ProcessManager.
 

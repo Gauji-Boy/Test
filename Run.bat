@@ -1,3 +1,2 @@
 @echo off
-python main.py
-pause
+call Run.bat

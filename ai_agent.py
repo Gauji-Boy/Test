@@ -1,6 +1,8 @@
 from PySide6.QtCore import QObject, QRunnable, Signal, QThreadPool
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold, Part as GenAiPart, GenerateContentResponse
+from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerateContentResponse
+from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerateContentResponse
+from google.generativeai.protos import Part as GenAiPart
 import logging
 from config_manager import ConfigManager
 from typing import Any, Dict, List, Optional # Python 3.9+ can use built-in list, dict
