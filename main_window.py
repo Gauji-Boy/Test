@@ -165,7 +165,15 @@ class MainWindow(QMainWindow):
         self.file_manager.file_saved.connect(self.editor_file_coordinator._handle_file_saved)
         self.file_manager.file_save_error.connect(self.editor_file_coordinator._handle_file_save_error)
 
-        self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded)
+        logger.info(f"MainWindow.__init__: Verifying connection objects before connect:") # Added
+        logger.info(f"  self.session_manager type: {type(self.session_manager)}, id: {id(self.session_manager)}") # Added
+        logger.info(f"  self.user_session_coordinator type: {type(self.user_session_coordinator)}, id: {id(self.user_session_coordinator)}") # Added
+        if hasattr(self.user_session_coordinator, '_handle_session_loaded'): # Added
+            logger.info(f"  Slot _handle_session_loaded type: {type(self.user_session_coordinator._handle_session_loaded)}") # Added
+            logger.info(f"  Is slot callable: {callable(self.user_session_coordinator._handle_session_loaded)}") # Added
+        else: # Added
+            logger.warning("  Slot _handle_session_loaded NOT FOUND on self.user_session_coordinator") # Added
+        # self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded) # Removed
         self.session_manager.session_saved.connect(self.user_session_coordinator._handle_session_saved_confirmation)
         self.session_manager.session_error.connect(self.user_session_coordinator._handle_session_error)
 
@@ -183,7 +191,10 @@ class MainWindow(QMainWindow):
             self.redo_action.setEnabled(False)
 
         self.pending_initial_path = initial_path
-        self.session_manager.load_session()
+        # self.session_manager.load_session() # Changed
+        session_data = self.session_manager.load_session() # Changed
+        self.user_session_coordinator._handle_session_loaded(session_data) # Added
+        logger.info(f"MainWindow.__init__: Directly calling _handle_session_loaded on UserSessionCoordinator with id: {id(self.user_session_coordinator)}") # Added
         self.welcome_page = None
         self._current_ai_controller = None
         self.app_controller_callback_for_recents = None # Added

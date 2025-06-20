@@ -58,7 +58,7 @@ class SessionManager(QObject):
             self.session_error.emit(error_msg)
 
     @Slot()
-    def load_session(self):
+    def load_session(self) -> dict: # Modified signature
         """
         Loads session data from session.json.
         Returns the loaded data as a dictionary.
@@ -85,21 +85,27 @@ class SessionManager(QObject):
 
                 logger.info(f"load_session: Successfully loaded data from {session_file_path}. Full data: {loaded_data}") # Modified
                 # print(f"SessionManager: Session loaded from {session_file_path}. Content: {loaded_data}")
+                logger.info(f"SessionManager.load_session: Attempting to emit session_loaded with data: {loaded_data}") # Added
                 self.session_loaded.emit(loaded_data)
+                logger.info("SessionManager.load_session: session_loaded signal emitted.") # Added
                 return loaded_data
             except json.JSONDecodeError as e:
                 logger.error(f"load_session: JSONDecodeError while loading {session_file_path}. Error: {e}. Using default session data.") # Added
                 error_msg = f"Error decoding session file {session_file_path}: {e}. Using default session."
                 # print(f"SessionManager: {error_msg}")
                 self.session_error.emit(error_msg)
+                logger.info(f"SessionManager.load_session: Attempting to emit session_loaded with DEFAULT data: {default_session_data}") # Added
                 self.session_loaded.emit(default_session_data) # Emit default data on error
+                logger.info("SessionManager.load_session: session_loaded signal emitted with DEFAULT data.") # Added
                 return default_session_data
             except Exception as e:
                 logger.error(f"load_session: Unexpected exception while loading {session_file_path}. Error: {e}. Using default session data.") # Added
                 error_msg = f"An unexpected error occurred while loading session: {e}. Using default session."
                 # print(f"SessionManager: {error_msg}")
                 self.session_error.emit(error_msg)
+                logger.info(f"SessionManager.load_session: Attempting to emit session_loaded with DEFAULT data: {default_session_data}") # Added
                 self.session_loaded.emit(default_session_data) # Emit default data on error
+                logger.info("SessionManager.load_session: session_loaded signal emitted with DEFAULT data.") # Added
                 return default_session_data
         else:
             # Existing log is good: logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}")
@@ -107,5 +113,7 @@ class SessionManager(QObject):
             logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}")
             # print(f"SessionManager: Session file {session_file_path} not found. Using default session.")
             # No error signal here, it's normal for first run
+            logger.info(f"SessionManager.load_session: Attempting to emit session_loaded with DEFAULT data: {default_session_data}") # Added
             self.session_loaded.emit(default_session_data)
+            logger.info("SessionManager.load_session: session_loaded signal emitted with DEFAULT data.") # Added
             return default_session_data
