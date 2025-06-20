@@ -1,6 +1,6 @@
 import os
 import logging
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import QObject, Slot # Signal removed if no longer needed by other parts
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from typing import Any, TYPE_CHECKING, Optional
 
@@ -13,12 +13,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class UserSessionCoordinator(QObject):
+    # recent_projects_loaded = Signal(list) # Removed
     main_win: Optional['MainWindow']
     recent_projects: list[str]
     recent_projects_limit: int # Added
 
     def __init__(self) -> None:
         super().__init__()
+        logger.info("UserSessionCoordinator INSTANCE CREATED") # Added
         self.main_win = None
         self.recent_projects = []
 
@@ -52,11 +54,20 @@ class UserSessionCoordinator(QObject):
 
     @Slot(dict)
     def _handle_session_loaded(self, session_data: dict[str, Any]) -> None:
+        print("DEBUG PRINT: UserSessionCoordinator._handle_session_loaded: Method ENTERED.", flush=True) # Added
+        logger.info("UserSessionCoordinator._handle_session_loaded: Method ENTERED.") # Added as first line
+        logger.info(f"UserSessionCoordinator._handle_session_loaded: Received raw session_data (type: {type(session_data)}): {session_data}") # Added as second line
         if not self.main_win: return
+        logger.info(f"UserSessionCoordinator._handle_session_loaded CALLED. session_data recent_projects: {session_data.get('recent_projects')}") # Existing, to remain
 
         self.recent_projects.clear()
         self.recent_projects.extend(session_data.get("recent_projects", []))
+        logger.info(f"UserSessionCoordinator._handle_session_loaded: self.recent_projects list AFTER extend is now: {self.recent_projects}") # Modified
+        # self.recent_projects_loaded.emit(self.recent_projects) # Removed
         self.main_win._update_recent_menu()
+        if self.main_win: # Added
+            logger.info(f"UserSessionCoordinator._handle_session_loaded: About to notify AppController with list: {self.recent_projects}") # Added
+            self.main_win.notify_app_controller_of_recent_projects_update(self.recent_projects) # Added
 
         root_path_from_session: str | None = session_data.get("root_path")
         open_files_data_from_session: dict[str, Any] = session_data.get("open_files_data", {})
@@ -74,7 +85,6 @@ class UserSessionCoordinator(QObject):
             else:
                 logger.warning(f"Session file not found, skipping: {path}")
 
-        self.main_win._handle_pending_initial_path_after_session_load(session_data)
 
         if active_file_path_to_restore and active_file_path_to_restore in self.main_win.editor_file_coordinator.path_to_editor:
             editor_to_activate: Any = self.main_win.editor_file_coordinator.path_to_editor[active_file_path_to_restore]
@@ -101,12 +111,20 @@ class UserSessionCoordinator(QObject):
 
     def add_recent_project(self, path: str) -> None:
         if not self.main_win: return
-        logger.info(f"Adding recent project: {path}")
+        logger.info(f"UserSessionCoordinator.add_recent_project CALLED with path: {path}") # Modified
+        logger.info(f"UserSessionCoordinator.add_recent_project: self.recent_projects BEFORE modification is: {self.recent_projects}") # Modified
+        logger.info(f"add_recent_project: self.recent_projects_limit: {self.recent_projects_limit}")
+
         if path in self.recent_projects:
             self.recent_projects.remove(path)
         self.recent_projects.insert(0, path)
+        logger.info(f"add_recent_project: self.recent_projects after insertion, before trimming: {self.recent_projects}")
+
         self.recent_projects = self.recent_projects[:self.recent_projects_limit] # Modified
+        logger.info(f"UserSessionCoordinator.add_recent_project: self.recent_projects AFTER trimming is: {self.recent_projects}") # Modified
+
         self.main_win._update_recent_menu()
+        logger.info("add_recent_project: About to call save_session()")
         self.save_session()
 
     def perform_clear_recent_projects_action(self) -> None:

@@ -32,10 +32,11 @@ class AppController:
             execution_coordinator=self.execution_coordinator
             # initial_path is handled by launch_main_window or similar methods
         )
+        self.main_window.set_app_controller_update_callback(self.handle_final_recent_projects_update) # Added
 
         # Provide MainWindow reference to coordinators
         self.editor_file_coordinator.set_main_window_ref(self.main_window)
-        self.user_session_coordinator.set_main_window_ref(self.main_window)
+        # self.user_session_coordinator.set_main_window_ref(self.main_window) # Removed
         self.collaboration_service.set_main_window_ref(self.main_window)
         self.execution_coordinator.set_main_window_ref(self.main_window)
 
@@ -59,6 +60,18 @@ class AppController:
         self.welcome_screen.remove_recent_requested.connect(self.main_window.user_session_coordinator.handle_remove_recent_project_with_confirmation)
         # Connect the join session requested signal
         self.welcome_screen.join_session_requested.connect(self.launch_for_join_session)
+
+        # Connect the new signal for when recent projects are loaded from session
+        # self.user_session_coordinator.recent_projects_loaded.connect(self.handle_recent_projects_loaded_from_session) # Removed
+
+    def handle_final_recent_projects_update(self, recent_projects_list: list): # Renamed and modified
+        # Ensure logging is available (it should be from main.py's setup)
+        logging.info(f"AppController.handle_final_recent_projects_update called with: {recent_projects_list}")
+        if hasattr(self, 'welcome_screen') and self.welcome_screen:
+            logging.info("AppController: Updating welcome screen's recent projects list via handle_final_recent_projects_update.")
+            self.welcome_screen.update_list(recent_projects_list)
+        else:
+            logging.warning("AppController: Welcome screen not available in handle_final_recent_projects_update, cannot update.")
 
     def run(self):
         self.welcome_screen.show()

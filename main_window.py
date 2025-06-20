@@ -121,6 +121,9 @@ class MainWindow(QMainWindow):
 
         self.editor_file_coordinator = editor_file_coordinator
         self.user_session_coordinator = user_session_coordinator
+        self.user_session_coordinator.set_main_window_ref(self) # Added
+        self.app_controller_callback_for_recents = None # Added
+        logger.info(f"MainWindow.__init__: Called set_main_window_ref on UserSessionCoordinator id: {id(self.user_session_coordinator)}") # Added
         self.collaboration_service = collaboration_service
         self.execution_coordinator = execution_coordinator
 
@@ -165,7 +168,15 @@ class MainWindow(QMainWindow):
         self.file_manager.file_saved.connect(self.editor_file_coordinator._handle_file_saved)
         self.file_manager.file_save_error.connect(self.editor_file_coordinator._handle_file_save_error)
 
-        self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded)
+        logger.info(f"MainWindow.__init__: Verifying connection objects before connect:") # Added
+        logger.info(f"  self.session_manager type: {type(self.session_manager)}, id: {id(self.session_manager)}") # Added
+        logger.info(f"  self.user_session_coordinator type: {type(self.user_session_coordinator)}, id: {id(self.user_session_coordinator)}") # Added
+        if hasattr(self.user_session_coordinator, '_handle_session_loaded'): # Added
+            logger.info(f"  Slot _handle_session_loaded type: {type(self.user_session_coordinator._handle_session_loaded)}") # Added
+            logger.info(f"  Is slot callable: {callable(self.user_session_coordinator._handle_session_loaded)}") # Added
+        else: # Added
+            logger.warning("  Slot _handle_session_loaded NOT FOUND on self.user_session_coordinator") # Added
+        # self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded) # Removed
         self.session_manager.session_saved.connect(self.user_session_coordinator._handle_session_saved_confirmation)
         self.session_manager.session_error.connect(self.user_session_coordinator._handle_session_error)
 
@@ -182,11 +193,27 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'redo_action'):
             self.redo_action.setEnabled(False)
 
-        self.pending_initial_path = initial_path
-        self.session_manager.load_session()
+        # self.session_manager.load_session() # Changed
+        session_data = self.session_manager.load_session() # Changed
+        self.user_session_coordinator._handle_session_loaded(session_data) # Added
+        logger.info(f"MainWindow.__init__: Directly calling _handle_session_loaded on UserSessionCoordinator with id: {id(self.user_session_coordinator)}") # Added
+        
+        # If an initial path was provided and no root path was loaded from session, initialize with initial path
+        if initial_path and not session_data.get("root_path"):
+            self.initialize_project(initial_path)
         self.welcome_page = None
         self._current_ai_controller = None
 
+
+    def set_app_controller_update_callback(self, callback): # Added
+        self.app_controller_callback_for_recents = callback # Added
+
+    def notify_app_controller_of_recent_projects_update(self, recent_projects_list): # Added
+        logger.info(f"MainWindow: Notifying AppController of recent projects update with: {recent_projects_list}") # Added
+        if self.app_controller_callback_for_recents: # Added
+            self.app_controller_callback_for_recents(recent_projects_list) # Added
+        else: # Added
+            logger.warning("MainWindow: app_controller_callback_for_recents not set. Cannot notify AppController.") # Added
 
     def setup_debugger_toolbar(self) -> None:
         self.debugger_toolbar = QToolBar("Debugger Toolbar", self)
@@ -237,6 +264,7 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
+                logger.info(f"About to add project to recents: {path}")
                 self.user_session_coordinator.add_recent_project(path)
         elif os.path.isfile(path):
             parent_dir: str = os.path.dirname(path)
@@ -246,6 +274,7 @@ class MainWindow(QMainWindow):
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
+                    logger.info(f"About to add project to recents: {parent_dir}")
                     self.user_session_coordinator.add_recent_project(parent_dir)
             else:
                 current_dir: str = os.getcwd()
@@ -254,6 +283,7 @@ class MainWindow(QMainWindow):
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
+                    logger.info(f"About to add project to recents: {current_dir}")
                     self.user_session_coordinator.add_recent_project(current_dir)
             self.editor_file_coordinator.open_new_tab(path)
         else:
@@ -264,6 +294,7 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
+                logger.info(f"About to add project to recents: {default_path}")
                 self.user_session_coordinator.add_recent_project(default_path)
         
     def setup_ui(self) -> None:
@@ -1163,7 +1194,7 @@ class MainWindow(QMainWindow):
 
         self.session_manager.save_session(
             open_files_data,
-            self.recent_projects,
+            self.user_session_coordinator.recent_projects,
             root_path_to_save,
             active_file_path
         )

@@ -4,6 +4,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 import os
+import logging # Added
+
+logger = logging.getLogger(__name__) # Added
 
 class WelcomeScreen(QWidget):
     path_selected = Signal(str)
@@ -15,14 +18,19 @@ class WelcomeScreen(QWidget):
 
     def __init__(self, recent_projects=None):
         super().__init__()
+        logger.info(f"WelcomeScreen __init__ called with recent_projects: {recent_projects}") # Added
         self.setWindowTitle("Welcome to Aether Editor")
         self.recent_projects = recent_projects if recent_projects is not None else []
         self.setup_ui()
         self._populate_recent_projects()
 
     def update_list(self, recent_folders: list):
-        self.recent_projects = recent_folders
+        logger.info(f"WelcomeScreen.update_list called with recent_folders: {recent_folders}") # Modified for clarity
+        logger.info(f"WelcomeScreen.update_list: QListWidget item count before clear: {self.recent_projects_list.count()}") # Added
         self.recent_projects_list.clear() # Clear the QListWidget
+        logger.info("WelcomeScreen.update_list: QListWidget cleared.") # Added
+        self.recent_projects = recent_folders
+        logger.info(f"WelcomeScreen.update_list: self.recent_projects updated to: {self.recent_projects}") # Added
         self._populate_recent_projects() # Re-populate with the new list
 
     def setup_ui(self):
@@ -89,12 +97,16 @@ class WelcomeScreen(QWidget):
         self.setFixedSize(600, 450) # Fixed size for the welcome screen
 
     def _populate_recent_projects(self):
-        self.recent_projects_list.clear()
+        logger.info(f"WelcomeScreen._populate_recent_projects called with self.recent_projects: {self.recent_projects}") # Modified for clarity
+        self.recent_projects_list.clear() # Note: update_list also clears, this might be redundant if always called from there.
         if not self.recent_projects:
+            logger.info("WelcomeScreen._populate_recent_projects: No recent projects, adding placeholder item.") # Added
             self.recent_projects_list.addItem("No recent projects.")
             self.recent_projects_list.item(0).setFlags(Qt.NoItemFlags) # Make it non-selectable
         else:
+            logger.info("WelcomeScreen._populate_recent_projects: Adding project paths to list widget.") # Added
             for project_path in self.recent_projects:
+                logger.info(f"WelcomeScreen._populate_recent_projects: Adding item: {project_path}") # Added
                 self.recent_projects_list.addItem(project_path)
 
     def _open_recent_project(self, item):
