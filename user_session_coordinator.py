@@ -2,7 +2,10 @@ import os
 import logging
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QLineEdit
-from typing import Any, TYPE_CHECKING, Optional # Added TYPE_CHECKING, Optional
+from typing import Any, TYPE_CHECKING, Optional
+
+from config_manager import ConfigManager # Added
+from config import DEFAULT_RECENT_PROJECTS_LIMIT # Added
 
 if TYPE_CHECKING:
     from main_window import MainWindow # Assuming main_window.py
@@ -10,13 +13,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class UserSessionCoordinator(QObject):
-    main_win: Optional['MainWindow'] # Forward reference for MainWindow, now Optional
+    main_win: Optional['MainWindow']
     recent_projects: list[str]
+    recent_projects_limit: int # Added
 
-    def __init__(self) -> None: # Removed main_window parameter
+    def __init__(self) -> None:
         super().__init__()
-        self.main_win = None # Initialize as None
-        self.recent_projects = [] # Initialize as empty list
+        self.main_win = None
+        self.recent_projects = []
+
+        config_mgr = ConfigManager() # Added
+        self.recent_projects_limit: int = config_mgr.load_setting('recent_projects_limit', DEFAULT_RECENT_PROJECTS_LIMIT) # Added
 
     def set_main_window_ref(self, main_window: 'MainWindow') -> None:
         self.main_win = main_window
@@ -99,7 +106,7 @@ class UserSessionCoordinator(QObject):
         if path in self.recent_projects:
             self.recent_projects.remove(path)
         self.recent_projects.insert(0, path)
-        self.recent_projects = self.recent_projects[:10]
+        self.recent_projects = self.recent_projects[:self.recent_projects_limit] # Modified
         self.main_win._update_recent_menu()
         self.save_session()
 
@@ -136,7 +143,8 @@ class UserSessionCoordinator(QObject):
             else:
                 logger.warning(f"Old path '{old_path}' not found in recent projects during rename. Adding new path '{new_path}'.")
                 self.recent_projects.insert(0, new_path)
-            self.recent_projects = self.recent_projects[:10]
+            # Ensure limit is respected even when adding a new path after old one not found
+            self.recent_projects = self.recent_projects[:self.recent_projects_limit] # Modified
             self.main_win._update_recent_menu()
             self.save_session()
             if hasattr(self.main_win, 'welcome_page') and self.main_win.welcome_page:
@@ -162,7 +170,7 @@ class UserSessionCoordinator(QObject):
     def update_recent_projects_from_welcome(self, updated_list: list[str]) -> None:
         if not self.main_win: return
         logger.info(f"Updating recent projects from welcome screen with list: {updated_list}")
-        self.recent_projects[:] = updated_list[:10]
+        self.recent_projects[:] = updated_list[:self.recent_projects_limit] # Modified
         self.main_win._update_recent_menu()
         self.save_session()
 

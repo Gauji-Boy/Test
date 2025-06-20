@@ -1,6 +1,6 @@
 from PySide6.QtCore import QObject, QRunnable, Signal, QThreadPool
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerateContentResponse # Removed Part as GenAiPart
+from google.generativeai.types import HarmCategory, HarmBlockThreshold, Part as GenAiPart, GenerateContentResponse
 import logging
 from config_manager import ConfigManager
 from typing import Any, Dict, List, Optional # Python 3.9+ can use built-in list, dict
@@ -32,12 +32,12 @@ class GeminiAgentWorker(QRunnable):
     signals: GeminiAgentWorkerSignals
     chat_session: genai.ChatSession
     user_message_text: Optional[str]
-    tool_response_part: Optional[Dict[str, Any]] # Changed type hint
+    tool_response_part: Optional[GenAiPart]
 
     def __init__(self,
                  chat_session: genai.ChatSession,
                  user_message_text: Optional[str] = None,
-                 tool_response_part: Optional[Dict[str, Any]] = None) -> None: # Changed type hint
+                 tool_response_part: Optional[GenAiPart] = None) -> None:
         super().__init__()
         logger.info(f"GeminiAgentWorker initialized. User message: '{str(user_message_text)[:100]}...', Tool part: {tool_response_part}")
         self.signals = GeminiAgentWorkerSignals()
@@ -51,8 +51,7 @@ class GeminiAgentWorker(QRunnable):
             response: Optional[GenerateContentResponse] = None
             if self.tool_response_part:
                 logger.info(f"Sending tool response part: {self.tool_response_part}")
-                # send_message expects an iterable of parts for the 'parts' argument
-                response = self.chat_session.send_message(parts=[self.tool_response_part])
+                response = self.chat_session.send_message(self.tool_response_part)
                 logger.debug(f"Raw API response received (after tool response): {response}")
             elif self.user_message_text:
                 logger.info(f"Sending user message: '{self.user_message_text[:100]}...'")
@@ -253,19 +252,18 @@ class GeminiAgent(QObject):
             else:
                 response_content_dict = {"result": result}
 
-        # Construct the part as a dictionary
-        tool_response_part_to_send: Dict[str, Any] = {
-            "function_response": {
-                "name": tool_name,
-                "response": response_content_dict
-            }
-        }
+        tool_response_part_to_send: GenAiPart = genai.types.Part(
+            function_response=genai.types.FunctionResponse(
+                name=tool_name,
+                response=response_content_dict
+            )
+        )
         
-        self.chat_history.append({'role': 'user', 'parts': [tool_response_part_to_send]}) # Append the dict
+        self.chat_history.append({'role': 'user', 'parts': [tool_response_part_to_send.to_dict()]})
         logger.debug(f"Added tool response part for '{tool_name}' to history before sending. History length: {len(self.chat_history)}")
 
         worker = GeminiAgentWorker(chat_session=self.chat_session,
-                                     tool_response_part=tool_response_part_to_send) # Pass the dict
+                                     tool_response_part=tool_response_part_to_send)
         
         worker.signals.new_message_received.connect(self._handle_ai_response)
         worker.signals.tool_call_requested.connect(self._handle_tool_call_request)

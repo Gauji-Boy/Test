@@ -1,8 +1,11 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
-from PySide6.QtGui import QFont, QColor, QTextCursor, QKeyEvent
+from PySide6.QtGui import QFont, QColor, QTextCursor, QKeyEvent # QFont is here
 from PySide6.QtCore import Qt, QProcess
 import platform
 import os
+
+from config_manager import ConfigManager # Added
+from config import DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE # Added
 
 class CustomPlainTextEdit(QPlainTextEdit): # Renamed from output_display to make it clear this is the custom widget
     def __init__(self, parent=None):
@@ -73,8 +76,14 @@ class InteractiveTerminal(QWidget):
                 padding: 5px;
             }
         """)
-        font = QFont("Consolas", 10)
+
+        # Load and set terminal font
+        config_mgr = ConfigManager()
+        term_font_family = config_mgr.load_setting('terminal_font_family', DEFAULT_TERMINAL_FONT_FAMILY)
+        term_font_size = config_mgr.load_setting('terminal_font_size', DEFAULT_TERMINAL_FONT_SIZE)
+        font = QFont(term_font_family, term_font_size)
         self.output_display.setFont(font)
+
         self.output_display.setReadOnly(False) # Shell input is through this
 
     def start_shell(self, working_dir: str):

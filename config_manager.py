@@ -11,12 +11,40 @@ try:
     from config import DEFAULT_EDITOR_SETTINGS
     from config import DEFAULT_AI_SETTINGS
     from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP
+    from config import DEFAULT_THEME_FILE_PATH
+    # Added for new defaults
+    from config import DEFAULT_MAIN_WINDOW_TITLE
+    from config import DEFAULT_MAIN_WINDOW_GEOMETRY
+    from config import DEFAULT_RECENT_PROJECTS_LIMIT
+    from config import DEFAULT_EDITOR_FONT_FAMILY
+    from config import DEFAULT_EDITOR_FONT_SIZE
+    from config import DEFAULT_TERMINAL_FONT_FAMILY
+    from config import DEFAULT_TERMINAL_FONT_SIZE
+    from config import DEFAULT_LANGUAGE_SELECTOR_ITEMS
+    # Added for editor layout defaults
+    from config import DEFAULT_LINE_NUMBER_AREA_PADDING
+    from config import DEFAULT_LINE_NUMBER_AREA_TEXT_RIGHT_PADDING
+    from config import DEFAULT_BREAKPOINT_GUTTER_WIDTH
 except ImportError as e:
     logger.warning(f"Could not import default configurations from config.py: {e}. Initialization might be skipped if not present.")
     DEFAULT_RUNNER_CONFIG = None
     DEFAULT_EDITOR_SETTINGS = None
     DEFAULT_AI_SETTINGS = None
     DEFAULT_EXTENSION_TO_LANGUAGE_MAP = None
+    DEFAULT_THEME_FILE_PATH = None
+    # Added for new defaults
+    DEFAULT_MAIN_WINDOW_TITLE = None
+    DEFAULT_MAIN_WINDOW_GEOMETRY = None
+    DEFAULT_RECENT_PROJECTS_LIMIT = None
+    DEFAULT_EDITOR_FONT_FAMILY = None
+    DEFAULT_EDITOR_FONT_SIZE = None
+    DEFAULT_TERMINAL_FONT_FAMILY = None
+    DEFAULT_TERMINAL_FONT_SIZE = None
+    DEFAULT_LANGUAGE_SELECTOR_ITEMS = None
+    # Added for editor layout defaults
+    DEFAULT_LINE_NUMBER_AREA_PADDING = None
+    DEFAULT_LINE_NUMBER_AREA_TEXT_RIGHT_PADDING = None
+    DEFAULT_BREAKPOINT_GUTTER_WIDTH = None
 
 class ConfigManager:
     """
@@ -28,6 +56,114 @@ class ConfigManager:
         self._initialize_default_editor_settings()
         self._initialize_default_ai_settings()
         self._initialize_default_extension_map()
+        self._initialize_default_theme_path()
+        # Added for new defaults
+        self._initialize_main_window_defaults()
+        self._initialize_font_defaults()
+        self._initialize_misc_defaults()
+        self._initialize_language_selector_defaults()
+        self._initialize_editor_layout_defaults() # Added
+
+    def _initialize_editor_layout_defaults(self) -> None: # Added method
+        """Initializes editor layout default values if not present."""
+        if DEFAULT_LINE_NUMBER_AREA_PADDING is not None:
+            if self.load_setting('editor_line_number_area_padding') is None:
+                self.save_setting('editor_line_number_area_padding', DEFAULT_LINE_NUMBER_AREA_PADDING)
+                logger.info("Initialized default editor_line_number_area_padding in config.json")
+        else:
+            logger.warning("DEFAULT_LINE_NUMBER_AREA_PADDING not available, skipping initialization.")
+
+        if DEFAULT_LINE_NUMBER_AREA_TEXT_RIGHT_PADDING is not None:
+            if self.load_setting('editor_line_number_area_text_right_padding') is None:
+                self.save_setting('editor_line_number_area_text_right_padding', DEFAULT_LINE_NUMBER_AREA_TEXT_RIGHT_PADDING)
+                logger.info("Initialized default editor_line_number_area_text_right_padding in config.json")
+        else:
+            logger.warning("DEFAULT_LINE_NUMBER_AREA_TEXT_RIGHT_PADDING not available, skipping initialization.")
+
+        if DEFAULT_BREAKPOINT_GUTTER_WIDTH is not None:
+            if self.load_setting('editor_breakpoint_gutter_width') is None:
+                self.save_setting('editor_breakpoint_gutter_width', DEFAULT_BREAKPOINT_GUTTER_WIDTH)
+                logger.info("Initialized default editor_breakpoint_gutter_width in config.json")
+        else:
+            logger.warning("DEFAULT_BREAKPOINT_GUTTER_WIDTH not available, skipping initialization.")
+
+    def _initialize_language_selector_defaults(self) -> None:
+        """Initializes language selector items if not present."""
+        if DEFAULT_LANGUAGE_SELECTOR_ITEMS is not None:
+            if self.load_setting('language_selector_items') is None:
+                self.save_setting('language_selector_items', DEFAULT_LANGUAGE_SELECTOR_ITEMS)
+                logger.info("Initialized default language_selector_items in config.json")
+        else:
+            logger.warning("DEFAULT_LANGUAGE_SELECTOR_ITEMS not available, skipping initialization.")
+
+    def _initialize_main_window_defaults(self) -> None:
+        """Initializes main window title and geometry if not present."""
+        if DEFAULT_MAIN_WINDOW_TITLE is not None:
+            if self.load_setting('main_window_title') is None:
+                self.save_setting('main_window_title', DEFAULT_MAIN_WINDOW_TITLE)
+                logger.info("Initialized default main_window_title in config.json")
+        else:
+            logger.warning("DEFAULT_MAIN_WINDOW_TITLE not available, skipping initialization.")
+
+        if DEFAULT_MAIN_WINDOW_GEOMETRY is not None:
+            if self.load_setting('main_window_geometry') is None:
+                self.save_setting('main_window_geometry', DEFAULT_MAIN_WINDOW_GEOMETRY)
+                logger.info("Initialized default main_window_geometry in config.json")
+        else:
+            logger.warning("DEFAULT_MAIN_WINDOW_GEOMETRY not available, skipping initialization.")
+
+    def _initialize_font_defaults(self) -> None:
+        """Initializes editor and terminal font settings if not present."""
+        if DEFAULT_EDITOR_FONT_FAMILY is not None:
+            if self.load_setting('editor_font_family') is None:
+                self.save_setting('editor_font_family', DEFAULT_EDITOR_FONT_FAMILY)
+                logger.info("Initialized default editor_font_family in config.json")
+        else:
+            logger.warning("DEFAULT_EDITOR_FONT_FAMILY not available, skipping initialization.")
+
+        if DEFAULT_EDITOR_FONT_SIZE is not None:
+            if self.load_setting('editor_font_size') is None:
+                self.save_setting('editor_font_size', DEFAULT_EDITOR_FONT_SIZE)
+                logger.info("Initialized default editor_font_size in config.json")
+        else:
+            logger.warning("DEFAULT_EDITOR_FONT_SIZE not available, skipping initialization.")
+
+        if DEFAULT_TERMINAL_FONT_FAMILY is not None:
+            if self.load_setting('terminal_font_family') is None:
+                self.save_setting('terminal_font_family', DEFAULT_TERMINAL_FONT_FAMILY)
+                logger.info("Initialized default terminal_font_family in config.json")
+        else:
+            logger.warning("DEFAULT_TERMINAL_FONT_FAMILY not available, skipping initialization.")
+
+        if DEFAULT_TERMINAL_FONT_SIZE is not None:
+            if self.load_setting('terminal_font_size') is None:
+                self.save_setting('terminal_font_size', DEFAULT_TERMINAL_FONT_SIZE)
+                logger.info("Initialized default terminal_font_size in config.json")
+        else:
+            logger.warning("DEFAULT_TERMINAL_FONT_SIZE not available, skipping initialization.")
+
+    def _initialize_misc_defaults(self) -> None:
+        """Initializes miscellaneous settings like recent projects limit if not present."""
+        if DEFAULT_RECENT_PROJECTS_LIMIT is not None:
+            if self.load_setting('recent_projects_limit') is None:
+                self.save_setting('recent_projects_limit', DEFAULT_RECENT_PROJECTS_LIMIT)
+                logger.info("Initialized default recent_projects_limit in config.json")
+        else:
+            logger.warning("DEFAULT_RECENT_PROJECTS_LIMIT not available, skipping initialization.")
+
+    def _initialize_default_theme_path(self) -> None:
+        """
+        Initializes the 'theme_file_path' in config.json if it doesn't exist.
+        """
+        if DEFAULT_THEME_FILE_PATH is not None:
+            current_theme_path: str | None = self.load_setting('theme_file_path')
+            if current_theme_path is None:
+                logger.info("Initializing default theme_file_path in config.json...")
+                self.save_setting('theme_file_path', DEFAULT_THEME_FILE_PATH)
+            else:
+                logger.debug("theme_file_path already present in config.json.")
+        else:
+            logger.warning("DEFAULT_THEME_FILE_PATH is not available, skipping its initialization in config.json.")
 
     def _initialize_default_runner_config(self) -> None:
         """

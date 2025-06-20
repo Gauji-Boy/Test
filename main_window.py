@@ -1,38 +1,103 @@
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget, QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar, QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton, QComboBox, QPlainTextEdit, QStyle, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem
-from PySide6.QtGui import QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QActionGroup, QFont
-from PySide6.QtCore import Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths, QObject, QProcess
+from PySide6.QtWidgets import (QMainWindow, QTabWidget, QStatusBar, QDockWidget, QApplication, QWidget,
+                               QVBoxLayout, QMenuBar, QMenu, QFileDialog, QLabel, QToolBar,
+                               QInputDialog, QMessageBox, QLineEdit, QPushButton, QToolButton,
+                               QComboBox, QPlainTextEdit, QStyle, QTreeWidget, QTreeWidgetItem,
+                               QListWidget, QListWidgetItem)
+from PySide6.QtGui import (QAction, QIcon, QTextCharFormat, QColor, QTextCursor, QActionGroup,
+                           QFont, QCloseEvent, QPaintEvent, QMouseEvent, QTextDocument) # Added QCloseEvent, QTextDocument
+from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, QStandardPaths,
+                            QObject, QProcess, QTextStream, QSize) # Added QSize
 from file_explorer import FileExplorer
-from code_editor import CodeEditor
-from debug_manager import DebugManager # Import DebugManager
-from interactive_terminal import InteractiveTerminal # Import the new interactive terminal
-from command_output_viewer import CommandOutputViewer # Import CommandOutputViewer
-from network_manager import NetworkManager, NetworkMessageType # Import NetworkManager and Enum
-from connection_dialog import ConnectionDialog # Import ConnectionDialog
-from ai_controller import AIController # Import AIController
+from code_editor import CodeEditor # Assuming CodeEditor has _InternalCodeEditor
+from debug_manager import DebugManager
+from interactive_terminal import InteractiveTerminal
+from command_output_viewer import CommandOutputViewer
+from network_manager import NetworkManager, NetworkMessageType
+from connection_dialog import ConnectionDialog
+from ai_controller import AIController
 from file_manager import FileManager
 from session_manager import SessionManager
 from process_manager import ProcessManager
 
-# Import new coordinators
 from editor_file_coordinator import EditorFileCoordinator
 from user_session_coordinator import UserSessionCoordinator
 from collaboration_service import CollaborationService
 from execution_coordinator import ExecutionCoordinator
 from config_manager import ConfigManager
-from config import DEFAULT_EXTENSION_TO_LANGUAGE_MAP
-from typing import Optional # Added
+from config import (DEFAULT_EXTENSION_TO_LANGUAGE_MAP, DEFAULT_MAIN_WINDOW_TITLE,
+                    DEFAULT_MAIN_WINDOW_GEOMETRY, DEFAULT_LANGUAGE_SELECTOR_ITEMS) # Added
 
+from typing import Optional, Any, Dict, List, Set # Added Dict, List, Set, Any
 import logging
 import tempfile
 import os
-import sys
-import shutil # For rmtree
-import json # Import json for structured messages
-import black # Import black for synchronous formatting
+# import sys # Not used
+import shutil
+import json
+import black
 
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
+    # Coordinator instances (injected)
+    editor_file_coordinator: EditorFileCoordinator
+    user_session_coordinator: UserSessionCoordinator
+    collaboration_service: CollaborationService
+    execution_coordinator: ExecutionCoordinator
+
+    # UI Elements
+    tab_widget: QTabWidget
+    status_bar: QStatusBar
+    file_explorer: FileExplorer
+    terminal_widget: InteractiveTerminal
+    command_output_viewer: CommandOutputViewer
+    control_status_label: QLabel
+    recent_projects_menu: QMenu
+    language_selector: QComboBox
+    run_action_button: QAction
+    debug_action_button: QAction
+    request_control_button: QPushButton
+    ai_assistant_button: QPushButton
+    cursor_pos_label: QLabel
+    language_label: QLabel
+    git_branch_label: QLabel
+    debugger_toolbar: QToolBar
+    continue_action: QAction
+    step_over_action: QAction
+    step_into_action: QAction
+    step_out_action: QAction
+    stop_action: QAction
+    left_tab_widget: QTabWidget
+    left_dock_widget: QDockWidget
+    terminal_dock: QDockWidget
+    bottom_dock_tab_widget: QTabWidget
+    variables_panel: QTreeWidget
+    call_stack_panel: QListWidget
+    breakpoints_panel: QListWidget
+    debugger_main_widget: QWidget
+    undo_action: QAction
+    redo_action: QAction
+    welcome_page: Optional[QWidget] # WelcomeScreen type, but QWidget for generality
+
+    # Internal State
+    threadpool: QThreadPool
+    network_manager: NetworkManager
+    recent_projects: List[str]
+    file_manager: FileManager
+    session_manager: SessionManager
+    process_manager: ProcessManager
+    debug_manager: DebugManager
+    editor_to_path: Dict[QWidget, str]
+    path_to_editor: Dict[str, CodeEditor]
+    extension_to_language_map_config: Dict[str, str]
+    active_breakpoints: Dict[str, Set[int]]
+    current_run_mode: str
+
+    _active_editor_document: Optional[QTextDocument]
+    pending_initial_path: Optional[str]
+    _current_ai_controller: Optional[AIController] # To keep AIController alive
+
+
     def __init__(self,
                  editor_file_coordinator: EditorFileCoordinator,
                  user_session_coordinator: UserSessionCoordinator,
@@ -40,53 +105,52 @@ class MainWindow(QMainWindow):
                  execution_coordinator: ExecutionCoordinator,
                  initial_path: Optional[str] = None) -> None:
         super().__init__()
-        self.setWindowTitle("Aether Editor")
-        self.setGeometry(100, 100, 1200, 800)
 
-        # Assign passed-in coordinators
+        config_mgr = ConfigManager() # Moved up to be available for title/geometry
+
+        # Load and set window title
+        title = config_mgr.load_setting('main_window_title', DEFAULT_MAIN_WINDOW_TITLE)
+        self.setWindowTitle(title)
+
+        # Load and set window geometry
+        geom = config_mgr.load_setting('main_window_geometry', DEFAULT_MAIN_WINDOW_GEOMETRY)
+        if isinstance(geom, list) and len(geom) == 4 and all(isinstance(x, int) for x in geom):
+            self.setGeometry(*geom)
+        else:
+            logger.warning(f"Loaded main_window_geometry '{geom}' is invalid. Using default.")
+            self.setGeometry(*DEFAULT_MAIN_WINDOW_GEOMETRY)
+
         self.editor_file_coordinator = editor_file_coordinator
         self.user_session_coordinator = user_session_coordinator
         self.collaboration_service = collaboration_service
         self.execution_coordinator = execution_coordinator
 
-        self.threadpool = QThreadPool() # Initialize QThreadPool for background tasks
+        self.threadpool = QThreadPool()
         logger.info(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
-        # self.is_updating_from_network = False # Moved to CollaborationService
         self.network_manager = NetworkManager(self)
-        # self.is_host = False # Moved to CollaborationService
-        # self.has_control = False # Moved to CollaborationService
-        self.recent_projects = [] # UserSessionCoordinator takes this reference
-
+        self.recent_projects = []
         self.file_manager = FileManager(self)
         self.session_manager = SessionManager(self)
         self.process_manager = ProcessManager(self)
         self.debug_manager = DebugManager(self)
+        self.editor_to_path = {}
+        self.path_to_editor = {}
 
-        self.editor_to_path = {} # EditorFileCoordinator takes this reference
-        self.path_to_editor = {} # EditorFileCoordinator takes this reference
-
-        config_mgr = ConfigManager()
+        # config_mgr = ConfigManager() # Moved up
         self.extension_to_language_map_config = config_mgr.load_setting('extension_to_language_map', DEFAULT_EXTENSION_TO_LANGUAGE_MAP)
         if self.extension_to_language_map_config is DEFAULT_EXTENSION_TO_LANGUAGE_MAP:
             logger.info("Using default EXTENSION_TO_LANGUAGE_MAP as it was not found in settings.")
         else:
             logger.info("Loaded EXTENSION_TO_LANGUAGE_MAP from settings.")
 
-        # self.current_run_mode = "Run" # Moved to ExecutionCoordinator
-        # self.active_breakpoints = {} # Moved to ExecutionCoordinator
-
-        # Instantiate Coordinators - REMOVED
-        # self.editor_file_coordinator = EditorFileCoordinator(self)
-        # self.user_session_coordinator = UserSessionCoordinator(self)
-        # self.collaboration_service = CollaborationService(self)
-        # self.execution_coordinator = ExecutionCoordinator(self)
+        self.active_breakpoints = {}
+        self.current_run_mode = "Run"
 
         self.setup_status_bar()
         self.setup_toolbar()
-        self.command_output_viewer = CommandOutputViewer(self) # Instantiate CommandOutputViewer
+        self.command_output_viewer = CommandOutputViewer(self)
 
-        # Connect DebugManager signals to ExecutionCoordinator
         self.debug_manager.session_started.connect(self.execution_coordinator._on_debug_session_started)
         self.debug_manager.session_stopped.connect(self.execution_coordinator._on_debug_session_stopped)
         self.debug_manager.paused.connect(self.execution_coordinator._on_debugger_paused)
@@ -97,204 +161,160 @@ class MainWindow(QMainWindow):
         self.setup_menu()
         self.setup_network_connections()
 
-        # Connect FileManager signals to EditorFileCoordinator or MainWindow
         self.file_manager.file_opened.connect(self.editor_file_coordinator._handle_file_opened)
         self.file_manager.file_open_error.connect(self.editor_file_coordinator._handle_file_open_error)
-        self.file_manager.dirty_status_changed.connect(self._handle_dirty_status_changed) # Stays in MainWindow
+        self.file_manager.dirty_status_changed.connect(self._handle_dirty_status_changed)
         self.file_manager.file_saved.connect(self.editor_file_coordinator._handle_file_saved)
         self.file_manager.file_save_error.connect(self.editor_file_coordinator._handle_file_save_error)
 
-        # Connect SessionManager signals to UserSessionCoordinator
         self.session_manager.session_loaded.connect(self.user_session_coordinator._handle_session_loaded)
         self.session_manager.session_saved.connect(self.user_session_coordinator._handle_session_saved_confirmation)
         self.session_manager.session_error.connect(self.user_session_coordinator._handle_session_error)
 
-        # Connect ProcessManager signals to ExecutionCoordinator
         self.process_manager.output_received.connect(self.execution_coordinator._handle_process_output)
         self.process_manager.process_started.connect(self.execution_coordinator._handle_process_started)
         self.process_manager.process_finished.connect(self.execution_coordinator._handle_process_finished)
         self.process_manager.process_error.connect(self.execution_coordinator._handle_process_error)
 
         self.update_ui_for_control_state()
-
-        # Initialize active editor undo stack reference
-        self._active_editor_undo_stack = None
+        self._active_editor_document = None
         
-        # Disable undo/redo actions initially (will be enabled by tab change if editor is valid)
-        if hasattr(self, 'undo_action'): # Check if setup_menu has been called
+        if hasattr(self, 'undo_action'):
             self.undo_action.setEnabled(False)
         if hasattr(self, 'redo_action'):
             self.redo_action.setEnabled(False)
 
-        # Session loading logic revised:
         self.pending_initial_path = initial_path
         self.session_manager.load_session()
-        # active_breakpoints moved to ExecutionCoordinator
+        self.welcome_page = None
+        self._current_ai_controller = None
 
 
-    def setup_debugger_toolbar(self):
+    def setup_debugger_toolbar(self) -> None:
         self.debugger_toolbar = QToolBar("Debugger Toolbar", self)
-        self.addToolBar(Qt.TopToolBarArea, self.debugger_toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.debugger_toolbar)
 
-        self.continue_action = QAction(self.style().standardIcon(QStyle.SP_MediaPlay), "Continue (F5)", self)
+        self.continue_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Continue (F5)", self)
         self.continue_action.setShortcut("F5")
-        self.continue_action.triggered.connect(lambda: self.debug_manager.continue_execution()) # Connect to DebugManager
+        self.continue_action.triggered.connect(lambda: self.debug_manager.continue_execution())
         self.continue_action.setEnabled(False)
         self.debugger_toolbar.addAction(self.continue_action)
 
-        self.step_over_action = QAction(self.style().standardIcon(QStyle.SP_MediaSkipForward), "Step Over (F10)", self)
+        self.step_over_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipForward), "Step Over (F10)", self)
         self.step_over_action.setShortcut("F10")
-        self.step_over_action.triggered.connect(lambda: self.debug_manager.step_over()) # Connect to DebugManager
+        self.step_over_action.triggered.connect(lambda: self.debug_manager.step_over())
         self.step_over_action.setEnabled(False)
         self.debugger_toolbar.addAction(self.step_over_action)
 
-        self.step_into_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekForward), "Step Into (F11)", self)
+        self.step_into_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Step Into (F11)", self)
         self.step_into_action.setShortcut("F11")
-        self.step_into_action.triggered.connect(lambda: self.debug_manager.step_into()) # Connect to DebugManager
+        self.step_into_action.triggered.connect(lambda: self.debug_manager.step_into())
         self.step_into_action.setEnabled(False)
         self.debugger_toolbar.addAction(self.step_into_action)
 
-        self.step_out_action = QAction(self.style().standardIcon(QStyle.SP_MediaSeekBackward), "Step Out (Shift+F11)", self)
+        self.step_out_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekBackward), "Step Out (Shift+F11)", self)
         self.step_out_action.setShortcut("Shift+F11")
-        self.step_out_action.triggered.connect(lambda: self.debug_manager.step_out()) # Connect to DebugManager
+        self.step_out_action.triggered.connect(lambda: self.debug_manager.step_out())
         self.step_out_action.setEnabled(False)
         self.debugger_toolbar.addAction(self.step_out_action)
 
-        self.stop_action = QAction(self.style().standardIcon(QStyle.SP_MediaStop), "Stop (Shift+F5)", self)
+        self.stop_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop), "Stop (Shift+F5)", self)
         self.stop_action.setShortcut("Shift+F5")
-        self.stop_action.triggered.connect(self.debug_manager.stop_session) # Connect to DebugManager
+        self.stop_action.triggered.connect(self.debug_manager.stop_session)
         self.stop_action.setEnabled(False)
         self.debugger_toolbar.addAction(self.stop_action)
 
         self.debugger_toolbar.setVisible(False)
 
-    def initialize_project(self, path: str, add_to_recents: bool = True):
-        """Initializes the project by setting the file explorer root and opening the terminal.
-           Called by user actions or by _handle_session_loaded.
-        """
+    def initialize_project(self, path: str, add_to_recents: bool = True) -> None:
         if path is None:
-            # This is a client-only startup.
-            self.editor_file_coordinator.open_new_tab() # Call coordinator
+            self.editor_file_coordinator.open_new_tab()
             if hasattr(self, 'left_dock_widget'):
                 self.left_dock_widget.setVisible(False)
-            return # Stop further processing
+            return
 
-        import os
         if os.path.isdir(path):
             self.file_explorer.set_root_path(path)
-            # Ensure file explorer is visible if it was hidden
-            if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
-                self.left_dock_widget.setVisible(True)
-            # Ensure file explorer is visible
             if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
-                self.user_session_coordinator.add_recent_project(path) # Call coordinator
+                self.user_session_coordinator.add_recent_project(path)
         elif os.path.isfile(path):
-            parent_dir = os.path.dirname(path)
+            parent_dir: str = os.path.dirname(path)
             if parent_dir:
                 self.file_explorer.set_root_path(parent_dir)
                 if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
-                    self.user_session_coordinator.add_recent_project(parent_dir) # Call coordinator
+                    self.user_session_coordinator.add_recent_project(parent_dir)
             else:
-                current_dir = os.getcwd()
+                current_dir: str = os.getcwd()
                 self.file_explorer.set_root_path(current_dir)
-                # Ensure file explorer is visible
                 if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
-                    self.user_session_coordinator.add_recent_project(current_dir) # Call coordinator
-            self.editor_file_coordinator.open_new_tab(path) # Call coordinator
+                    self.user_session_coordinator.add_recent_project(current_dir)
+            self.editor_file_coordinator.open_new_tab(path)
         else:
             logger.warning(f"Provided path is neither a file nor a directory: {path}")
-            # Fallback to default behavior if path is invalid
-            default_path = os.path.expanduser("~")
+            default_path: str = os.path.expanduser("~")
             self.file_explorer.set_root_path(default_path)
-            # Ensure file explorer is visible
             if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
-                self.user_session_coordinator.add_recent_project(default_path) # Call coordinator
+                self.user_session_coordinator.add_recent_project(default_path)
         
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self.editor_file_coordinator.close_tab) # Connect to coordinator
+        self.tab_widget.tabCloseRequested.connect(self.editor_file_coordinator.close_tab)
         self.setCentralWidget(self.tab_widget)
         self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
-        self.tab_widget.currentChanged.connect(self._update_undo_redo_actions) # Connect to update undo/redo actions
+        self.tab_widget.currentChanged.connect(self._update_undo_redo_actions)
 
-        # --- Debugger Panel Setup ---
-        # Main widget and layout for the debugger panel
         debugger_main_widget = QWidget()
         debugger_layout = QVBoxLayout(debugger_main_widget)
-
-        # Variables Panel
         self.variables_panel = QTreeWidget()
         self.variables_panel.setHeaderLabels(["Variable", "Value", "Type"])
         locals_item = QTreeWidgetItem(self.variables_panel, ["Locals"])
         self.variables_panel.addTopLevelItem(locals_item)
         debugger_layout.addWidget(self.variables_panel)
-
-        # Call Stack Panel
         self.call_stack_panel = QListWidget()
-        self.call_stack_panel.addItem(QListWidgetItem("main.py:10 - <module>")) # Placeholder
+        self.call_stack_panel.addItem(QListWidgetItem("main.py:10 - <module>"))
         debugger_layout.addWidget(self.call_stack_panel)
-
-        # Breakpoints Panel
         self.breakpoints_panel = QListWidget()
         debugger_layout.addWidget(self.breakpoints_panel)
-
-        # Store debugger_main_widget for later use in tab creation
         self.debugger_main_widget = debugger_main_widget
 
-        # --- File Explorer Setup (modified for tabbing) ---
         self.file_explorer = FileExplorer()
-        self.file_explorer.file_opened.connect(self.editor_file_coordinator.open_new_tab) # Connect to coordinator
-        self.file_explorer.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_explorer.file_opened.connect(self.editor_file_coordinator.open_new_tab)
+        self.file_explorer.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_explorer.customContextMenuRequested.connect(self.on_file_tree_context_menu)
 
-        # --- Tabbed Dock Widget for File Explorer and Debugger ---
         self.left_tab_widget = QTabWidget()
-        self.left_tab_widget.addTab(self.file_explorer, "File Explorer") # Add FileExplorer widget
+        self.left_tab_widget.addTab(self.file_explorer, "File Explorer")
         self.left_tab_widget.addTab(self.debugger_main_widget, "Debugger")
-
-        self.left_dock_widget = QDockWidget("Explorer/Debugger", self) # This is the new main left dock
-        self.left_dock_widget.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.left_dock_widget = QDockWidget("Explorer/Debugger", self)
+        self.left_dock_widget.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.left_dock_widget.setWidget(self.left_tab_widget)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.left_dock_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock_widget)
 
-        # Integrated Terminal Panel (Bottom Dock)
-        self.terminal_dock = QDockWidget("Terminal", self) # Renamed dock title
-        self.terminal_dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea)
-        
-        # Add the new InteractiveTerminal widget directly to the dock
+        self.terminal_dock = QDockWidget("Terminal", self)
+        self.terminal_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
         self.terminal_widget = InteractiveTerminal(self)
-        # self.terminal_dock.setWidget(self.terminal_widget) # Old way
-
-        # New Tabbed Dock for Terminal and Output
         self.bottom_dock_tab_widget = QTabWidget()
         self.bottom_dock_tab_widget.addTab(self.terminal_widget, "Shell")
         self.bottom_dock_tab_widget.addTab(self.command_output_viewer, "Output")
+        self.terminal_dock.setWidget(self.bottom_dock_tab_widget)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
 
-        self.terminal_dock.setWidget(self.bottom_dock_tab_widget) # Set new tab widget
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
-
-
-    # _open_file_in_new_tab is removed as its functionality is now handled by
-    # file_manager.open_file() and the _handle_file_opened slot.
-
-    def setup_menu(self):
-        menu_bar = self.menuBar()
-
-        # File Menu
-        file_menu = menu_bar.addMenu("&File")
+    def setup_menu(self) -> None:
+        menu_bar: QMenuBar = self.menuBar()
+        file_menu: QMenu = menu_bar.addMenu("&File")
         new_file_action = QAction("&New File", self); new_file_action.setShortcut("Ctrl+N")
         new_file_action.triggered.connect(self.editor_file_coordinator.create_new_file); file_menu.addAction(new_file_action)
         save_file_action = QAction("&Save", self); save_file_action.setShortcut("Ctrl+S")
@@ -393,16 +413,48 @@ class MainWindow(QMainWindow):
 
     def setup_toolbar(self):
         toolbar = self.addToolBar("Main Toolbar")
+                                            QLineEdit.Normal, old_path)
+        if ok and new_path:
+            if new_path != old_path:
+                try:
+                    # Attempt to rename the actual folder/file if it exists
+                    if os.path.exists(old_path):
+                        os.rename(old_path, new_path)
+                        QMessageBox.information(self, "Rename Successful", f"Renamed '{old_path}' to '{new_path}'.")
+                    else:
+                        QMessageBox.warning(self, "Path Not Found", f"Original path '{old_path}' does not exist. Updating list only.")
+
+                    # Update in recent projects list
+                    if old_path in self.recent_projects:
+                        index = self.recent_projects.index(old_path)
+                        self.recent_projects[index] = new_path
+                        self._update_recent_menu()
+                        self.save_session() # Save the updated session
+                except OSError as e:
+                    QMessageBox.critical(self, "Rename Error", f"Could not rename: {e}")
+            else:
+                QMessageBox.information(self, "No Change", "New path is the same as the old path. No action taken.")
+
+    def setup_toolbar(self):
+        toolbar = self.addToolBar("Main Toolbar")
         
-        # Run/Debug Dropdown Button
+        config_mgr = ConfigManager() # Added
+
         # Mode Selector (QComboBox)
         self.language_selector = QComboBox(self)
-        self.language_selector.addItem("Plain Text") # Default
-        self.language_selector.addItem("Python")
-        self.language_selector.addItem("JavaScript")
-        self.language_selector.addItem("HTML")
-        self.language_selector.addItem("CSS")
-        self.language_selector.addItem("JSON")
+
+        language_items = config_mgr.load_setting(
+            'language_selector_items',
+            DEFAULT_LANGUAGE_SELECTOR_ITEMS
+        )
+
+        self.language_selector.clear() # Clear any default items if QComboBox adds one
+        if isinstance(language_items, list) and all(isinstance(item, str) for item in language_items):
+            self.language_selector.addItems(language_items)
+        else: # Fallback if config is malformed
+            logger.warning("Malformed language_selector_items in config, using defaults.")
+            self.language_selector.addItems(DEFAULT_LANGUAGE_SELECTOR_ITEMS)
+
         self.language_selector.setFixedWidth(100) # Adjust width as needed
         toolbar.addWidget(self.language_selector)
 
