@@ -186,7 +186,18 @@ class MainWindow(QMainWindow):
         self.session_manager.load_session()
         self.welcome_page = None
         self._current_ai_controller = None
+        self.app_controller_callback_for_recents = None # Added
 
+
+    def set_app_controller_update_callback(self, callback): # Added
+        self.app_controller_callback_for_recents = callback # Added
+
+    def notify_app_controller_of_recent_projects_update(self, recent_projects_list): # Added
+        logger.info(f"MainWindow: Notifying AppController of recent projects update with: {recent_projects_list}") # Added
+        if self.app_controller_callback_for_recents: # Added
+            self.app_controller_callback_for_recents(recent_projects_list) # Added
+        else: # Added
+            logger.warning("MainWindow: app_controller_callback_for_recents not set. Cannot notify AppController.") # Added
 
     def setup_debugger_toolbar(self) -> None:
         self.debugger_toolbar = QToolBar("Debugger Toolbar", self)

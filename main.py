@@ -61,15 +61,17 @@ class AppController:
         self.welcome_screen.join_session_requested.connect(self.launch_for_join_session)
 
         # Connect the new signal for when recent projects are loaded from session
-        self.user_session_coordinator.recent_projects_loaded.connect(self.handle_recent_projects_loaded_from_session)
+        # self.user_session_coordinator.recent_projects_loaded.connect(self.handle_recent_projects_loaded_from_session) # Removed
+        self.main_window.set_app_controller_update_callback(self.handle_final_recent_projects_update) # Added
 
-    def handle_recent_projects_loaded_from_session(self, recent_projects_list: list):
-        # Check if the welcome screen instance exists and is visible
-        if hasattr(self, 'welcome_screen') and self.welcome_screen and self.welcome_screen.isVisible():
-            logging.info(f"AppController: Session loaded, updating welcome screen recent projects with: {recent_projects_list}") # Use logging directly
+    def handle_final_recent_projects_update(self, recent_projects_list: list): # Renamed and modified
+        # Ensure logging is available (it should be from main.py's setup)
+        logging.info(f"AppController.handle_final_recent_projects_update called with: {recent_projects_list}")
+        if hasattr(self, 'welcome_screen') and self.welcome_screen:
+            logging.info("AppController: Updating welcome screen's recent projects list via handle_final_recent_projects_update.")
             self.welcome_screen.update_list(recent_projects_list)
         else:
-            logging.info("AppController: Session loaded, welcome screen not visible, no update to its list needed directly.") # Use logging directly
+            logging.warning("AppController: Welcome screen not available in handle_final_recent_projects_update, cannot update.")
 
     def run(self):
         self.welcome_screen.show()

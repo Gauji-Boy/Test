@@ -41,6 +41,8 @@ class SessionManager(QObject):
         }
 
         session_file_path = self._get_session_file_path()
+        logger.info(f"save_session: Attempting to save session to file: {session_file_path}") # Added
+        logger.info(f"save_session: Data to be saved: {session_data_to_save}") # Added
         try:
             with open(session_file_path, 'w', encoding='utf-8') as f:
                 json.dump(session_data_to_save, f, indent=4)
@@ -63,6 +65,7 @@ class SessionManager(QObject):
         Emits session_loaded signal on success, or session_error on failure.
         """
         session_file_path = self._get_session_file_path()
+        logger.info(f"load_session: Attempting to load session from file: {session_file_path}") # Added
         default_session_data = {
             "open_files_data": {},
             "recent_projects": [],
@@ -80,24 +83,28 @@ class SessionManager(QObject):
                 if "active_file_path" not in loaded_data:
                     loaded_data["active_file_path"] = None
 
-                logger.info(f"Loaded session data, recent_projects: {loaded_data.get('recent_projects')}") # Added
+                logger.info(f"load_session: Successfully loaded data from {session_file_path}. Full data: {loaded_data}") # Modified
                 # print(f"SessionManager: Session loaded from {session_file_path}. Content: {loaded_data}")
                 self.session_loaded.emit(loaded_data)
                 return loaded_data
             except json.JSONDecodeError as e:
+                logger.error(f"load_session: JSONDecodeError while loading {session_file_path}. Error: {e}. Using default session data.") # Added
                 error_msg = f"Error decoding session file {session_file_path}: {e}. Using default session."
                 # print(f"SessionManager: {error_msg}")
                 self.session_error.emit(error_msg)
                 self.session_loaded.emit(default_session_data) # Emit default data on error
                 return default_session_data
             except Exception as e:
+                logger.error(f"load_session: Unexpected exception while loading {session_file_path}. Error: {e}. Using default session data.") # Added
                 error_msg = f"An unexpected error occurred while loading session: {e}. Using default session."
                 # print(f"SessionManager: {error_msg}")
                 self.session_error.emit(error_msg)
                 self.session_loaded.emit(default_session_data) # Emit default data on error
                 return default_session_data
         else:
-            logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}") # Added
+            # Existing log is good: logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}")
+            # No change needed here based on the specific wording of the existing log.
+            logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}")
             # print(f"SessionManager: Session file {session_file_path} not found. Using default session.")
             # No error signal here, it's normal for first run
             self.session_loaded.emit(default_session_data)

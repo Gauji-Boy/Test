@@ -1,6 +1,6 @@
 import os
 import logging
-from PySide6.QtCore import QObject, Slot, Signal # Added Signal
+from PySide6.QtCore import QObject, Slot # Signal removed if no longer needed by other parts
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from typing import Any, TYPE_CHECKING, Optional
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class UserSessionCoordinator(QObject):
-    recent_projects_loaded = Signal(list) # Added
+    # recent_projects_loaded = Signal(list) # Removed
     main_win: Optional['MainWindow']
     recent_projects: list[str]
     recent_projects_limit: int # Added
@@ -57,8 +57,10 @@ class UserSessionCoordinator(QObject):
 
         self.recent_projects.clear()
         self.recent_projects.extend(session_data.get("recent_projects", []))
-        self.recent_projects_loaded.emit(self.recent_projects) # Added
+        # self.recent_projects_loaded.emit(self.recent_projects) # Removed
         self.main_win._update_recent_menu()
+        if self.main_win: # Added
+            self.main_win.notify_app_controller_of_recent_projects_update(self.recent_projects) # Added
 
         root_path_from_session: str | None = session_data.get("root_path")
         open_files_data_from_session: dict[str, Any] = session_data.get("open_files_data", {})
@@ -103,12 +105,20 @@ class UserSessionCoordinator(QObject):
 
     def add_recent_project(self, path: str) -> None:
         if not self.main_win: return
-        logger.info(f"Adding recent project: {path}")
+        logger.info(f"add_recent_project: Called with path: {path}")
+        logger.info(f"add_recent_project: self.recent_projects before modification: {self.recent_projects}")
+        logger.info(f"add_recent_project: self.recent_projects_limit: {self.recent_projects_limit}")
+
         if path in self.recent_projects:
             self.recent_projects.remove(path)
         self.recent_projects.insert(0, path)
+        logger.info(f"add_recent_project: self.recent_projects after insertion, before trimming: {self.recent_projects}")
+
         self.recent_projects = self.recent_projects[:self.recent_projects_limit] # Modified
+        logger.info(f"add_recent_project: self.recent_projects after trimming: {self.recent_projects}")
+
         self.main_win._update_recent_menu()
+        logger.info("add_recent_project: About to call save_session()")
         self.save_session()
 
     def perform_clear_recent_projects_action(self) -> None:
