@@ -46,10 +46,9 @@ class ProcessManager(QObject):
             # QProcess.findExecutable is a static method, but it seems to be causing issues.
             # We will rely on os.path.isfile and os.access for checking executability.
             # if not QProcess.findExecutable(program): # Commented out due to error
-            if not (os.path.isfile(program) and os.access(program, os.X_OK)):
-                self.process_error.emit(f"Executable '{program}' not found or not executable. Attempting to run anyway.")
-                self.process = None
-                return
+            # Removed explicit file existence and executability check.
+            # QProcess should handle finding the executable in the system's PATH.
+            # The previous check was too restrictive for common executables like 'python', 'node', etc.
 
             self.process.setProgram(program)
             self.process.setArguments(arguments)

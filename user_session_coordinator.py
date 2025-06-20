@@ -28,10 +28,9 @@ class UserSessionCoordinator(QObject):
     def set_main_window_ref(self, main_window: 'MainWindow') -> None:
         self.main_win = main_window
         # Initialize attributes that depend on main_window
-        if self.main_win: # Ensure main_win is set
-            self.recent_projects = self.main_win.recent_projects
-        else: # Should not happen
-            self.recent_projects = []
+        # The recent_projects list will be populated by _handle_session_loaded
+        # after the session is loaded by SessionManager.
+        # No need to initialize from main_win.recent_projects as it's now removed.
 
 
     def save_session(self) -> None:

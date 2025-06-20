@@ -82,7 +82,6 @@ class MainWindow(QMainWindow):
     # Internal State
     threadpool: QThreadPool
     network_manager: NetworkManager
-    recent_projects: List[str]
     file_manager: FileManager
     session_manager: SessionManager
     process_manager: ProcessManager
@@ -129,7 +128,6 @@ class MainWindow(QMainWindow):
         logger.info(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
         self.network_manager = NetworkManager(self)
-        self.recent_projects = []
         self.file_manager = FileManager(self)
         self.session_manager = SessionManager(self)
         self.process_manager = ProcessManager(self)
@@ -797,8 +795,7 @@ class MainWindow(QMainWindow):
             self.file_explorer.set_root_path(selected_directory)
             self.setWindowTitle(f"Aether Editor - {os.path.basename(selected_directory)}")
             self.terminal_widget.start_shell(selected_directory) # Start shell in new directory
-            self.add_recent_project(selected_directory) # Add to recent projects
-            self.save_session() # Save session after opening folder
+            self.user_session_coordinator.add_recent_project(selected_directory) # Add to recent projects via coordinator
 
     def close_tab(self, index=None): # Made index optional as per later definition
         if index is None:
@@ -1242,18 +1239,6 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Session Error", error_message)
         self.status_bar.showMessage(f"Session error: {error_message}", 5000)
 
-    def add_recent_project(self, path: str):
-        if path not in self.recent_projects:
-            self.recent_projects.insert(0, path) # Add to the beginning
-            self.recent_projects = self.recent_projects[:10] # Keep only the last 10
-            self._update_recent_menu()
-            self.save_session() # Persist changes
-        else:
-            # If the path is already in recent_projects, move it to the front
-            self.recent_projects.remove(path)
-            self.recent_projects.insert(0, path)
-            self._update_recent_menu()
-            self.save_session() # Save updated recent projects
 
     def _show_welcome_page(self):
         from welcome_screen import WelcomeScreen # Import here to avoid circular dependency
@@ -1263,7 +1248,7 @@ class MainWindow(QMainWindow):
                 self.tab_widget.removeTab(i)
                 break
 
-        self.welcome_page = WelcomeScreen(recent_projects=self.recent_projects)
+        self.welcome_page = WelcomeScreen(recent_projects=self.user_session_coordinator.recent_projects)
         self.welcome_page.path_selected.connect(self.initialize_project)
         self.welcome_page.recent_projects_changed.connect(self._update_recent_projects_from_welcome)
         self.welcome_page.clear_recents_requested.connect(self._perform_clear_recent_projects_logic)

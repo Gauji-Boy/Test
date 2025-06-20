@@ -78,10 +78,10 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        command_template_list: list[str] | None = self.runner_config.get(language_name)
-        if not command_template_list:
-            logger.warning(f"No 'run' command configured for language '{language_name}' in self.runner_config.")
-            QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
+        command_template_list: list[str] | None = self.runner_config.get(language_name, {}).get("run")
+        if not command_template_list or not isinstance(command_template_list, list):
+            logger.warning(f"No 'run' command configured or invalid format for language '{language_name}' in self.runner_config.")
+            QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured or it's in an invalid format for the language '{language_name}'.")
             return
 
         working_dir: str = os.path.dirname(file_path) or os.getcwd()
@@ -116,6 +116,32 @@ class ExecutionCoordinator(QObject):
 
         if not self.main_win.editor_file_coordinator.save_current_file():
             QMessageBox.warning(self.main_win, "Debug", "Save operation cancelled or failed. Debug aborted.")
+            return
+
+        _fname, extension = os.path.splitext(file_path)
+        language_name: str | None = self.extension_to_language_map.get(extension.lower())
+        if not language_name:
+            logger.warning(f"No language found for extension '{extension}' in extension_to_language_map.")
+            QMessageBox.warning(self.main_win, "Debug Error", f"No language is configured for file type '{extension}'.")
+            return
+
+        command_template_list: list[str] | None = self.runner_config.get(language_name, {}).get("debug")
+        if not command_template_list or not isinstance(command_template_list, list):
+            logger.warning(f"No 'debug' command configured or invalid format for language '{language_name}' in self.runner_config.")
+            QMessageBox.warning(self.main_win, "Debug Error", f"No 'debug' command is configured or it's in an invalid format for the language '{language_name}'.")
+            return
+
+        working_dir: str = os.path.dirname(file_path) or os.getcwd()
+        output_file_no_ext: str = os.path.splitext(file_path)[0]
+
+        command_parts: list[str] = []
+        for part_template in command_template_list:
+            part: str = part_template.replace("{file}", file_path)
+            part = part.replace("{output_file}", output_file_no_ext)
+            command_parts.append(part)
+
+        if not command_parts:
+            QMessageBox.warning(self.main_win, "Debug Error", "Command became empty after processing template.")
             return
 
         for path, lines_set in self.active_breakpoints.items():
