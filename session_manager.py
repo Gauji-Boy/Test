@@ -1,6 +1,9 @@
 import os
 import json
+import logging # Added
 from PySide6.QtCore import QObject, Slot, QStandardPaths, Signal
+
+logger = logging.getLogger(__name__) # Added
 
 class SessionManager(QObject):
     # Signal to inform about errors during session loading or saving
@@ -29,6 +32,7 @@ class SessionManager(QObject):
         root_path: Current root path of the file explorer.
         active_file_path: Path of the currently active file/tab.
         """
+        logger.info(f"Saving session with recent_projects: {recent_projects}") # Added
         session_data_to_save = {
             "open_files_data": open_files_data, # This now stores hashes and dirty flags
             "recent_projects": recent_projects,
@@ -76,6 +80,7 @@ class SessionManager(QObject):
                 if "active_file_path" not in loaded_data:
                     loaded_data["active_file_path"] = None
 
+                logger.info(f"Loaded session data, recent_projects: {loaded_data.get('recent_projects')}") # Added
                 # print(f"SessionManager: Session loaded from {session_file_path}. Content: {loaded_data}")
                 self.session_loaded.emit(loaded_data)
                 return loaded_data
@@ -92,6 +97,7 @@ class SessionManager(QObject):
                 self.session_loaded.emit(default_session_data) # Emit default data on error
                 return default_session_data
         else:
+            logger.info(f"Session file not found. Using default session data, recent_projects: {default_session_data.get('recent_projects')}") # Added
             # print(f"SessionManager: Session file {session_file_path} not found. Using default session.")
             # No error signal here, it's normal for first run
             self.session_loaded.emit(default_session_data)

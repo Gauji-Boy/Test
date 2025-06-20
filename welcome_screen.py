@@ -4,6 +4,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 import os
+import logging # Added
+
+logger = logging.getLogger(__name__) # Added
 
 class WelcomeScreen(QWidget):
     path_selected = Signal(str)
@@ -21,6 +24,7 @@ class WelcomeScreen(QWidget):
         self._populate_recent_projects()
 
     def update_list(self, recent_folders: list):
+        logger.info(f"WelcomeScreen update_list called with: {recent_folders}") # Added
         self.recent_projects = recent_folders
         self.recent_projects_list.clear() # Clear the QListWidget
         self._populate_recent_projects() # Re-populate with the new list
@@ -89,6 +93,7 @@ class WelcomeScreen(QWidget):
         self.setFixedSize(600, 450) # Fixed size for the welcome screen
 
     def _populate_recent_projects(self):
+        logger.info(f"Populating recent projects in WelcomeScreen with: {self.recent_projects}") # Added
         self.recent_projects_list.clear()
         if not self.recent_projects:
             self.recent_projects_list.addItem("No recent projects.")

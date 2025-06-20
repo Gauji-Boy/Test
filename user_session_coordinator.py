@@ -1,6 +1,6 @@
 import os
 import logging
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import QObject, Slot, Signal # Added Signal
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from typing import Any, TYPE_CHECKING, Optional
 
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class UserSessionCoordinator(QObject):
+    recent_projects_loaded = Signal(list) # Added
     main_win: Optional['MainWindow']
     recent_projects: list[str]
     recent_projects_limit: int # Added
@@ -56,6 +57,7 @@ class UserSessionCoordinator(QObject):
 
         self.recent_projects.clear()
         self.recent_projects.extend(session_data.get("recent_projects", []))
+        self.recent_projects_loaded.emit(self.recent_projects) # Added
         self.main_win._update_recent_menu()
 
         root_path_from_session: str | None = session_data.get("root_path")

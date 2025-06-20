@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(path)
             if add_to_recents:
+                logger.info(f"About to add project to recents: {path}")
                 self.user_session_coordinator.add_recent_project(path)
         elif os.path.isfile(path):
             parent_dir: str = os.path.dirname(path)
@@ -246,6 +247,7 @@ class MainWindow(QMainWindow):
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
+                    logger.info(f"About to add project to recents: {parent_dir}")
                     self.user_session_coordinator.add_recent_project(parent_dir)
             else:
                 current_dir: str = os.getcwd()
@@ -254,6 +256,7 @@ class MainWindow(QMainWindow):
                     self.left_dock_widget.setVisible(True)
                 self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
+                    logger.info(f"About to add project to recents: {current_dir}")
                     self.user_session_coordinator.add_recent_project(current_dir)
             self.editor_file_coordinator.open_new_tab(path)
         else:
@@ -264,6 +267,7 @@ class MainWindow(QMainWindow):
                 self.left_dock_widget.setVisible(True)
             self.terminal_widget.start_shell(default_path)
             if add_to_recents:
+                logger.info(f"About to add project to recents: {default_path}")
                 self.user_session_coordinator.add_recent_project(default_path)
         
     def setup_ui(self) -> None:
