@@ -40,6 +40,10 @@ class ExecutionCoordinator(QObject):
         else:
             logger.info("Loaded EXTENSION_TO_LANGUAGE_MAP from settings.")
 
+        self.compiled_exe_path = None
+        self.is_running_cpp_sequence = False
+        self.cpp_compilation_working_dir = None # To store working_dir for the execution step
+
     def set_main_window_ref(self, main_window: 'MainWindow') -> None:
         self.main_win = main_window
         if self.main_win:
@@ -84,19 +88,120 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured or it's in an invalid format for the language '{language_name}'.")
             return
 
-        working_dir: str = os.path.dirname(file_path) or os.getcwd()
-        output_file_no_ext: str = os.path.splitext(file_path)[0]
+        working_dir: str = os.path.dirname(file_path) or os.getcwd() # Define working_dir earlier
+        output_file_no_ext: str = os.path.splitext(file_path)[0] # Define output_file_no_ext earlier
 
-        command_parts: list[str] = []
-        for part_template in command_template_list:
-            part: str = part_template.replace("{file}", file_path)
-            part = part.replace("{output_file}", output_file_no_ext)
-            command_parts.append(part)
+        # Path preparations (assuming file_path and output_file_no_ext are defined earlier)
+        # These are unquoted, QProcess will handle quoting for direct calls if needed.
+        # Ensure logger.debug lines for raw paths and stripping are here if you want to keep them
+        logger.debug(f"Raw file_path before quoting: '[{file_path}]'")
+        logger.debug(f"Raw output_file_no_ext before quoting: '[{output_file_no_ext}]'")
 
-        if not command_parts:
-            QMessageBox.warning(self.main_win, "Execution Error", "Command became empty after processing template.")
-            return
-        self.main_win.process_manager.execute(command_parts, working_dir)
+        file_path = file_path.strip()
+        output_file_no_ext = output_file_no_ext.strip()
+
+        file_path_for_command = file_path
+        output_file_exe_path_for_command = output_file_no_ext + ".exe"
+        output_file_no_ext_for_command = output_file_no_ext
+        # Add any other general placeholder values you might need, e.g. for Java class_name
+        # class_name_for_command = os.path.splitext(os.path.basename(file_path_for_command))[0]
+
+
+        # --- C++ specific compile-then-run logic ---
+        if language_name == "C++": # Assuming "run" implies compile then execute for C++
+            self.is_running_cpp_sequence = True
+            self.compiled_exe_path = output_file_exe_path_for_command # Store for execution after successful compile
+            self.cpp_compilation_working_dir = working_dir # Store for use in execution step
+
+            # 1. Construct C++ Compilation Command from runner_config
+            # command_template_list should be like: ["g++", "{file}", "-o", "{output_file_exe}"]
+            cpp_compile_command_parts: list[str] = []
+            for part_template in command_template_list:
+                part: str = part_template
+                part = part.replace("{file}", file_path_for_command)
+                part = part.replace("{output_file_exe}", output_file_exe_path_for_command)
+                cpp_compile_command_parts.append(part)
+
+            logger.info(f"Executing C++ compilation: {cpp_compile_command_parts} in {working_dir}")
+
+            # Ensure signal is connected only once or disconnect before connecting
+            try:
+                self.main_win.process_manager.process_finished.disconnect(self._handle_cpp_compilation_finished)
+            except RuntimeError: # Catches "signal not connected" or already disconnected
+                pass
+            self.main_win.process_manager.process_finished.connect(self._handle_cpp_compilation_finished)
+
+            self.main_win.process_manager.execute(cpp_compile_command_parts, working_dir)
+
+        # --- Generic command execution logic (for non-C++ languages or other command types) ---
+        else:
+            self.is_running_cpp_sequence = False # Ensure flag is reset
+
+            generic_command_parts: list[str] = []
+            for part_template in command_template_list:
+                part: str = part_template
+                part = part.replace("{file}", file_path_for_command)
+                part = part.replace("{output_file_exe}", output_file_exe_path_for_command)
+                part = part.replace("{output_file}", output_file_no_ext_for_command)
+                # Example for Java:
+                # if language_name == "Java" and "{class_name}" in part:
+                #     part = part.replace("{class_name}", class_name_for_command)
+                generic_command_parts.append(part)
+
+            # Logic for cmd.exe (if any command still uses it, though C++ doesn't anymore for compilation)
+            if generic_command_parts and generic_command_parts[0].lower() == "cmd.exe" and \
+               len(generic_command_parts) > 1 and generic_command_parts[1] == "/c" and \
+               len(generic_command_parts) > 2:
+                actual_command = " ".join(generic_command_parts[2:])
+                # If actual_command needs internal quotes for paths with spaces, they should have been added
+                # during the placeholder replacement if this path is ever reactivated.
+                # For now, this cmd.exe path is not used by our modified C++ config.
+                final_command_parts = [generic_command_parts[0], generic_command_parts[1], actual_command]
+                logger.info(f"Executing command (via cmd.exe): {final_command_parts} in {working_dir}")
+            else: # Direct execution
+                final_command_parts = generic_command_parts
+                logger.info(f"Executing command (direct): {final_command_parts} in {working_dir}")
+
+            self.main_win.process_manager.execute(final_command_parts, working_dir)
+
+    @Slot(int, QProcess.ExitStatus)
+    def _handle_cpp_compilation_finished(self, exit_code, exit_status):
+        # IMPORTANT: Disconnect immediately
+        try:
+            self.main_win.process_manager.process_finished.disconnect(self._handle_cpp_compilation_finished)
+        except RuntimeError:
+            logger.warning("_handle_cpp_compilation_finished: Could not disconnect signal.")
+
+        if not self.is_running_cpp_sequence:
+            return # Not part of the C++ sequence we initiated
+
+        # Store these to local variables before resetting instance variables
+        compiled_exe_path_local = self.compiled_exe_path
+        working_dir_local = self.cpp_compilation_working_dir # Use the stored working_dir
+
+        # Reset instance variables for the next sequence
+        self.is_running_cpp_sequence = False
+        self.compiled_exe_path = None
+        self.cpp_compilation_working_dir = None
+
+        if exit_code == 0 and exit_status == QProcess.NormalExit:
+            logger.info(f"C++ compilation successful. Executing: {compiled_exe_path_local}")
+            if compiled_exe_path_local:
+                # Determine working directory for the executable
+                # Using the directory of the executable itself is often a good default
+                exe_working_dir = os.path.dirname(compiled_exe_path_local)
+                if not os.path.isdir(exe_working_dir): # Check if dirname returned a valid dir
+                    logger.warning(f"Could not determine executable's directory: {exe_working_dir}. Falling back to compilation working_dir: {working_dir_local}")
+                    exe_working_dir = working_dir_local # Fallback
+
+                execution_command = [compiled_exe_path_local] # QProcess handles paths with spaces
+
+                logger.info(f"Executing compiled C++ program: {execution_command} in {exe_working_dir}")
+                self.main_win.process_manager.execute(execution_command, exe_working_dir)
+            else:
+                logger.error("C++ compilation successful, but compiled_exe_path was not available.")
+        else:
+            logger.error(f"C++ compilation failed. Exit code: {exit_code}, Status: {exit_status}. Not executing.")
 
     @Slot()
     def _handle_debug_request(self) -> None:

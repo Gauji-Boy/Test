@@ -27,8 +27,8 @@ RUNNER_CONFIG: Dict[str, Dict[str, List[str]]] = {
         "debug": ["java", "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005", "{class_name}"] # Placeholder
     },
     "C++": {
-        "run": ["g++", "{file}", "-o", "{output_file}", "&&", "{output_file}"],
-        "debug": ["gdb", "{output_file}"] # Placeholder
+        "run": ["g++", "{file}", "-o", "{output_file_exe}"],
+        "debug": ["gdb", "{output_file_exe}"] # Placeholder
     },
     "C": {
         "run": ["gcc", "{file}", "-o", "{output_file}", "&&", "{output_file}"],
