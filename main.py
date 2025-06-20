@@ -32,10 +32,11 @@ class AppController:
             execution_coordinator=self.execution_coordinator
             # initial_path is handled by launch_main_window or similar methods
         )
+        self.main_window.set_app_controller_update_callback(self.handle_final_recent_projects_update) # Added
 
         # Provide MainWindow reference to coordinators
         self.editor_file_coordinator.set_main_window_ref(self.main_window)
-        self.user_session_coordinator.set_main_window_ref(self.main_window)
+        # self.user_session_coordinator.set_main_window_ref(self.main_window) # Removed
         self.collaboration_service.set_main_window_ref(self.main_window)
         self.execution_coordinator.set_main_window_ref(self.main_window)
 
@@ -62,7 +63,6 @@ class AppController:
 
         # Connect the new signal for when recent projects are loaded from session
         # self.user_session_coordinator.recent_projects_loaded.connect(self.handle_recent_projects_loaded_from_session) # Removed
-        self.main_window.set_app_controller_update_callback(self.handle_final_recent_projects_update) # Added
 
     def handle_final_recent_projects_update(self, recent_projects_list: list): # Renamed and modified
         # Ensure logging is available (it should be from main.py's setup)

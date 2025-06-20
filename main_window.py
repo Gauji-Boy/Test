@@ -121,6 +121,9 @@ class MainWindow(QMainWindow):
 
         self.editor_file_coordinator = editor_file_coordinator
         self.user_session_coordinator = user_session_coordinator
+        self.user_session_coordinator.set_main_window_ref(self) # Added
+        self.app_controller_callback_for_recents = None # Added
+        logger.info(f"MainWindow.__init__: Called set_main_window_ref on UserSessionCoordinator id: {id(self.user_session_coordinator)}") # Added
         self.collaboration_service = collaboration_service
         self.execution_coordinator = execution_coordinator
 
@@ -190,14 +193,16 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'redo_action'):
             self.redo_action.setEnabled(False)
 
-        self.pending_initial_path = initial_path
         # self.session_manager.load_session() # Changed
         session_data = self.session_manager.load_session() # Changed
         self.user_session_coordinator._handle_session_loaded(session_data) # Added
         logger.info(f"MainWindow.__init__: Directly calling _handle_session_loaded on UserSessionCoordinator with id: {id(self.user_session_coordinator)}") # Added
+        
+        # If an initial path was provided and no root path was loaded from session, initialize with initial path
+        if initial_path and not session_data.get("root_path"):
+            self.initialize_project(initial_path)
         self.welcome_page = None
         self._current_ai_controller = None
-        self.app_controller_callback_for_recents = None # Added
 
 
     def set_app_controller_update_callback(self, callback): # Added
@@ -1189,7 +1194,7 @@ class MainWindow(QMainWindow):
 
         self.session_manager.save_session(
             open_files_data,
-            self.recent_projects,
+            self.user_session_coordinator.recent_projects,
             root_path_to_save,
             active_file_path
         )

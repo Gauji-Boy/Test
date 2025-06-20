@@ -54,8 +54,11 @@ class UserSessionCoordinator(QObject):
 
     @Slot(dict)
     def _handle_session_loaded(self, session_data: dict[str, Any]) -> None:
+        print("DEBUG PRINT: UserSessionCoordinator._handle_session_loaded: Method ENTERED.", flush=True) # Added
+        logger.info("UserSessionCoordinator._handle_session_loaded: Method ENTERED.") # Added as first line
+        logger.info(f"UserSessionCoordinator._handle_session_loaded: Received raw session_data (type: {type(session_data)}): {session_data}") # Added as second line
         if not self.main_win: return
-        logger.info(f"UserSessionCoordinator._handle_session_loaded CALLED. session_data recent_projects: {session_data.get('recent_projects')}") # Added
+        logger.info(f"UserSessionCoordinator._handle_session_loaded CALLED. session_data recent_projects: {session_data.get('recent_projects')}") # Existing, to remain
 
         self.recent_projects.clear()
         self.recent_projects.extend(session_data.get("recent_projects", []))
@@ -82,7 +85,6 @@ class UserSessionCoordinator(QObject):
             else:
                 logger.warning(f"Session file not found, skipping: {path}")
 
-        self.main_win._handle_pending_initial_path_after_session_load(session_data)
 
         if active_file_path_to_restore and active_file_path_to_restore in self.main_win.editor_file_coordinator.path_to_editor:
             editor_to_activate: Any = self.main_win.editor_file_coordinator.path_to_editor[active_file_path_to_restore]
