@@ -10,7 +10,7 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, 
 from file_explorer import FileExplorer
 from code_editor import CodeEditor # Assuming CodeEditor has _InternalCodeEditor
 from debug_manager import DebugManager
-from interactive_terminal import InteractiveTerminal
+from interactive_terminal import HighFidelityTerminal
 from command_output_viewer import CommandOutputViewer
 from network_manager import NetworkManager, NetworkMessageType
 from connection_dialog import ConnectionDialog
@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
     tab_widget: QTabWidget
     status_bar: QStatusBar
     file_explorer: FileExplorer
-    terminal_widget: InteractiveTerminal
+    terminal_widget: HighFidelityTerminal
     command_output_viewer: CommandOutputViewer
     control_status_label: QLabel
     recent_projects_menu: QMenu
@@ -334,7 +334,7 @@ class MainWindow(QMainWindow):
 
         self.terminal_dock = QDockWidget("Terminal", self)
         self.terminal_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
-        self.terminal_widget = InteractiveTerminal(self)
+        self.terminal_widget = HighFidelityTerminal(self) # Changed to HighFidelityTerminal
         self.bottom_dock_tab_widget = QTabWidget()
         self.bottom_dock_tab_widget.addTab(self.terminal_widget, "Shell")
         self.bottom_dock_tab_widget.addTab(self.command_output_viewer, "Output")

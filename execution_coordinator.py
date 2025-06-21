@@ -96,7 +96,27 @@ class ExecutionCoordinator(QObject):
         if not command_parts:
             QMessageBox.warning(self.main_win, "Execution Error", "Command became empty after processing template.")
             return
-        self.main_win.process_manager.execute(command_parts, working_dir)
+
+        # Construct the full command string to be executed in the terminal
+        command_string = " ".join(command_parts)
+
+        # Ensure the terminal widget is available and execute the command
+        if self.main_win and hasattr(self.main_win, 'terminal_widget') and self.main_win.terminal_widget:
+            self.main_win.terminal_widget.execute_ide_command(command_string)
+            # Switch focus to the terminal tab
+            if hasattr(self.main_win, 'bottom_dock_tab_widget') and hasattr(self.main_win, 'terminal_widget'):
+                for i in range(self.main_win.bottom_dock_tab_widget.count()):
+                    if self.main_win.bottom_dock_tab_widget.widget(i) == self.main_win.terminal_widget:
+                        self.main_win.bottom_dock_tab_widget.setCurrentIndex(i)
+                        break
+            if hasattr(self.main_win, 'terminal_dock'):
+                self.main_win.terminal_dock.show()
+                self.main_win.terminal_dock.raise_()
+                self.main_win.terminal_widget.setFocus() # Set focus to the terminal input widget
+        else:
+            QMessageBox.warning(self.main_win, "Execution Error", "Terminal widget is not available.")
+            logger.error("ExecutionCoordinator: Terminal widget not found in main_win for executing IDE command.")
+
 
     @Slot()
     def _handle_debug_request(self) -> None:

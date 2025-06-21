@@ -1,74 +1,66 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
-from PySide6.QtGui import QFont, QColor, QTextCursor, QKeyEvent # QFont is here
-from PySide6.QtCore import Qt, QProcess
+from PySide6.QtGui import QFont, QTextCursor, QKeyEvent
+from PySide6.QtCore import Qt, QProcess, QProcessEnvironment
 import platform
 import os
 
-from config_manager import ConfigManager # Added
-from config import DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE # Added
+from config_manager import ConfigManager
+from config import DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE
 
-class CustomPlainTextEdit(QPlainTextEdit): # Renamed from output_display to make it clear this is the custom widget
+class TerminalInputWidget(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.prompt_end_position = 0
+        self.parent_terminal = parent # Store a reference to the HighFidelityTerminal
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            cursor = self.textCursor()
-            # Correct way to get the current line's text for command execution
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-            command_text = cursor.selectedText() # This gets the full line up to the cursor
-            
-            # We need to extract the command entered after the last prompt.
-            # Assuming prompt_end_position marks the start of the editable command area.
-            # This logic might need refinement based on how prompts are displayed.
-            # For now, let's assume the command is what's after the prompt_end_position on the current line.
-            # This CustomPlainTextEdit is primarily for the *interactive shell*, not general output.
-            # So, the command logic here is for the shell.
-
-            # The command extraction needs to be relative to the prompt.
-            # Let's simplify: the text from prompt_end_position to current cursor position on the line is the command.
-            # However, the original code implies the whole line after prompt is the command.
-            # For an interactive shell, this is typical.
-
-            # The parent (InteractiveTerminal) should manage sending the command.
-            if hasattr(self.parent(), 'send_command_to_shell'): # Check if parent is InteractiveTerminal
-                 # Get text from prompt_end_position to current cursor end of line
-                current_line_text = self.toPlainText().splitlines()[-1] # Get current line
-                # This logic for command extraction is tricky.
-                # A simpler way for CustomPlainTextEdit: just emit signal with the line.
-                # Let InteractiveTerminal handle prompt logic if needed.
-                # For now, stick to the original intent:
-                self.parent().send_command_to_shell(command_text.strip()) # Send the stripped selected text
-            
-            self.appendPlainText("") # Move to a new line
-            self.prompt_end_position = self.textCursor().position() # Update for the new line's prompt
-            event.accept()
-        elif event.key() == Qt.Key.Key_Backspace:
-            if self.textCursor().position() <= self.prompt_end_position:
-                event.ignore()
-            else:
-                super().keyPressEvent(event)
-        else:
+        if not self.parent_terminal or not self.parent_terminal.shell_process or \
+           self.parent_terminal.shell_process.state() != QProcess.ProcessState.Running:
             super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        text_to_send = ""
+
+        if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+            text_to_send = "\n"
+        elif key == Qt.Key.Key_Backspace:
+            text_to_send = "\x08"
+        elif key == Qt.Key.Key_Tab:
+            text_to_send = "\t"
+        elif event.text():
+            text_to_send = event.text()
+
+        if text_to_send:
+            self.parent_terminal.shell_process.write(text_to_send.encode('utf-8'))
+            event.accept() # Consume the event, text will appear when shell echoes it
+        else:
+            super().keyPressEvent(event) # Let QPlainTextEdit handle other keys if needed (e.g., Ctrl+C if not handled by shell)
+
+    def insertFromMimeData(self, source): # Handle paste
+        if source.hasText() and self.parent_terminal and self.parent_terminal.shell_process and \
+           self.parent_terminal.shell_process.state() == QProcess.ProcessState.Running:
+            text_to_paste = source.text()
+            # Sanitize pasted text a bit: replace CR LF with LF, and CR with LF
+            text_to_paste = text_to_paste.replace('\r\n', '\n').replace('\r', '\n')
+            self.parent_terminal.shell_process.write(text_to_paste.encode('utf-8'))
+        else:
+            super().insertFromMimeData(source)
 
 
-class InteractiveTerminal(QWidget):
+class HighFidelityTerminal(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Interactive Terminal")
+        self.setWindowTitle("High Fidelity Terminal")
 
-        self.shell_process = None # For the interactive user shell
+        self.shell_process = None
 
         self.main_layout = QVBoxLayout(self)
         self.setLayout(self.main_layout)
 
-        # QPlainTextEdit for terminal display and interaction (for the shell)
-        self.output_display = CustomPlainTextEdit(self) # Use custom class
-        self.main_layout.addWidget(self.output_display)
+        self.terminal_input_widget = TerminalInputWidget(self) # Use new class, pass self
+        self.main_layout.addWidget(self.terminal_input_widget)
 
-        self.output_display.setStyleSheet("""
+        self.terminal_input_widget.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #282c34;
                 color: #abb2bf;
@@ -77,14 +69,12 @@ class InteractiveTerminal(QWidget):
             }
         """)
 
-        # Load and set terminal font
         config_mgr = ConfigManager()
         term_font_family = config_mgr.load_setting('terminal_font_family', DEFAULT_TERMINAL_FONT_FAMILY)
         term_font_size = config_mgr.load_setting('terminal_font_size', DEFAULT_TERMINAL_FONT_SIZE)
         font = QFont(term_font_family, term_font_size)
-        self.output_display.setFont(font)
-
-        self.output_display.setReadOnly(False) # Shell input is through this
+        self.terminal_input_widget.setFont(font)
+        self.terminal_input_widget.setReadOnly(False) # It's not directly editable, but receives focus for key events
 
     def start_shell(self, working_dir: str):
         if self.shell_process and self.shell_process.state() != QProcess.NotRunning:
@@ -92,75 +82,130 @@ class InteractiveTerminal(QWidget):
             self.shell_process.waitForFinished()
 
         self.shell_process = QProcess(self)
+        self.shell_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.shell_process.setWorkingDirectory(working_dir)
-        self.shell_process.readyReadStandardOutput.connect(self._on_shell_output)
-        self.shell_process.readyReadStandardError.connect(self._on_shell_error) # Separate handler for clarity
+
+        # Setup environment for interactive mode (especially for Unix-like shells)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("TERM", "xterm-256color") # Emulate a common terminal type
+        # PS1 might be useful for bash/zsh to ensure a prompt, but shells usually provide one in interactive mode.
+        # env.insert("PS1", "\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ")
+        self.shell_process.setProcessEnvironment(env)
+
+        self.shell_process.readyReadStandardOutput.connect(self._on_shell_output_received)
+        # self.shell_process.finished.connect(self._on_shell_finished) # Optional: handle shell termination
+
+        shell_executable = ""
+        args = []
 
         if platform.system() == "Windows":
-            self.shell_process.start("cmd.exe")
+            # Check for PowerShell first
+            powershell_path = QProcess.findExecutable("powershell.exe")
+            if powershell_path:
+                shell_executable = powershell_path
+                args = ["-NoLogo", "-NoExit", "-Command", "-"] # Use -Command - for reading from stdin
+            else: # Fallback to cmd.exe
+                cmd_path = QProcess.findExecutable("cmd.exe")
+                if cmd_path:
+                    shell_executable = cmd_path
+                    args = ["/K"] # /K keeps cmd open after command
+                else:
+                    self.append_output("Error: Neither powershell.exe nor cmd.exe found.\n")
+                    return
         else:
-            self.shell_process.start("/bin/bash")
+            # Try to get default shell from environment
+            default_shell = os.environ.get("SHELL")
+            if default_shell and QProcess.findExecutable(default_shell):
+                shell_executable = default_shell
+            elif QProcess.findExecutable("bash"): # Fallback to bash
+                shell_executable = "bash"
+            elif QProcess.findExecutable("sh"): # Fallback to sh
+                shell_executable = "sh"
+            else:
+                self.append_output("Error: No suitable shell found.\n")
+                return
+            args = ["-i"] # Start in interactive mode
 
-        # Initial prompt might need to be written if shell doesn't provide one immediately
-        # or if we want a custom prompt format.
-        # For now, rely on shell's own prompt. After shell starts, _on_shell_output will handle its output.
+        if shell_executable:
+            if args:
+                self.shell_process.start(shell_executable, args)
+            else:
+                self.shell_process.start(shell_executable)
 
-    def _on_shell_output(self): # Renamed from _handle_output
-        if not self.shell_process: return
+            if not self.shell_process.waitForStarted(5000): # 5 sec timeout
+                self.append_output(f"Error starting shell: {self.shell_process.errorString()}\n")
+            else:
+                # On non-Windows, after starting with "-i", the shell might need a moment
+                # or a specific command to fully initialize its interactive prompt.
+                # For cmd.exe with /K, it should show a prompt.
+                # For powershell with -NoExit -Command -, it awaits stdin.
+                pass
+        else:
+             self.append_output("Shell executable path could not be determined.\n")
+
+
+    def _on_shell_output_received(self):
+        if not self.shell_process:
+            return
+
         data = self.shell_process.readAllStandardOutput()
         if data:
-            self.append_output(data.data().decode(errors='replace')) # Use append_output
+            try:
+                # Try UTF-8 first, then system's default, then replace errors
+                text = data.data().decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    text = data.data().decode(errors='replace') # System default or fallback
+                except Exception as e:
+                    text = f"[Decoding Error: {e}]"
 
-    def _on_shell_error(self): # New handler for stderr of the shell
-        if not self.shell_process: return
-        error_data = self.shell_process.readAllStandardError()
-        if error_data:
-            self.append_output(error_data.data().decode(errors='replace')) # Use append_output, maybe different color later
+            self.append_output(text)
 
-    def send_command_to_shell(self, command: str):
+    def execute_ide_command(self, command: str):
+        """Executes a command originating from an IDE action (e.g., Run button)."""
         if self.shell_process and self.shell_process.state() == QProcess.ProcessState.Running:
-            self.output_display.appendPlainText(command) # Echo command
-            self.shell_process.write((command + "\n").encode())
-            # The prompt handling in CustomPlainTextEdit might need adjustment after command echo.
-            # For now, let the next output from shell create the new prompt line.
-            # self.output_display.prompt_end_position = self.output_display.textCursor().position()
+            full_command = command + "\n"
+            self.shell_process.write(full_command.encode('utf-8'))
+            # The command itself will be echoed by the shell if the shell is configured to do so.
+            # We don't manually append it to the display here.
+        else:
+            self.append_output(f"Shell not running. Cannot execute: {command}\n")
 
-
-    # Methods for ProcessManager output handling (not for interactive shell commands)
     def append_output(self, text: str):
-        """Appends text (e.g., from ProcessManager) to the terminal display."""
-        self.output_display.moveCursor(QTextCursor.MoveOperation.End)
-        self.output_display.insertPlainText(text)
-        self.output_display.moveCursor(QTextCursor.MoveOperation.End)
-        # Update prompt_end_position if this output is considered part of the "prompt" area for backspace protection.
-        # This might need care if mixing shell output and ProcessManager output.
-        # For ProcessManager output, it's typically read-only, so prompt_end_position update might not be desired here
-        # or should be handled differently.
-        # If append_output is *only* for non-interactive output, then self.output_display.prompt_end_position should not be updated here.
-        # Let's assume ProcessManager output does not change the interactive prompt position.
+        """Appends text (from shell stdout/stderr) to the terminal display."""
+        self.terminal_input_widget.moveCursor(QTextCursor.MoveOperation.End)
+        self.terminal_input_widget.insertPlainText(text)
+        self.terminal_input_widget.moveCursor(QTextCursor.MoveOperation.End)
+        self.terminal_input_widget.ensureCursorVisible()
+
+    def setFocus(self):
+        """Sets focus to the terminal input widget."""
+        self.terminal_input_widget.setFocus()
 
     def clear_output(self):
-        """Clears the terminal display (e.g., before running a new command via ProcessManager)."""
-        self.output_display.clear()
-        # After clearing, if there's an active shell, we might want to re-display its prompt.
-        # This is complex. For now, clear simply clears. The shell might re-prompt on next interaction or output.
-        # Or, MainWindow could explicitly re-prompt if needed after clearing for a command run.
-        # For ProcessManager runs, clearing is usually for the *output of that run*, not the interactive shell.
-        # So, the interactive shell's prompt should ideally be preserved or restored.
-        # This indicates that perhaps ProcessManager output should go to a *different* display
-        # or be visually distinct and not interfere with CustomPlainTextEdit's prompt logic.
-        # For now, this will clear everything.
+        """Clears the terminal display."""
+        self.terminal_input_widget.clear()
+        # If shell is running, it might be good to send a Ctrl+L or similar to ask shell to redraw prompt,
+        # but this is complex and shell-dependent. For now, just clears the display.
+
+    # Optional: Handler for when the shell process itself finishes/crashes
+    # def _on_shell_finished(self, exit_code, exit_status):
+    #     status_message = f"Shell process finished. Exit code: {exit_code}, Status: {exit_status}\n"
+    #     if exit_status == QProcess.ExitStatus.CrashExit:
+    #         status_message = f"Shell process crashed. Exit code: {exit_code}\n"
+    #     self.append_output(status_message)
+    #     # Optionally, try to restart the shell or disable input.
 
 if __name__ == '__main__':
     from PySide6.QtWidgets import QApplication
     import sys
 
     app = QApplication(sys.argv)
-    terminal = InteractiveTerminal()
+    terminal = HighFidelityTerminal()
     terminal.resize(800, 600)
     terminal.show()
     
     # Automatically start the shell when the widget is shown
-    terminal.start_shell(os.getcwd())
+    terminal.start_shell(os.getcwd()) # Use current working directory
     
     sys.exit(app.exec())
