@@ -35,7 +35,7 @@ class ExecutionCoordinator(QObject):
             logger.info("Using default RUNNER_CONFIG as it was not found in settings.")
         else:
             logger.info("Loaded RUNNER_CONFIG from settings.")
-        logger.debug(f"Effective RUNNER_CONFIG: {self.runner_config}") # Log loaded runner_config
+        # logger.debug(f"Effective RUNNER_CONFIG: {self.runner_config}") # Removed temp log
 
         self.extension_to_language_map = self.config_manager.load_setting('extension_to_language_map', DEFAULT_EXTENSION_TO_LANGUAGE_MAP)
         if self.extension_to_language_map is DEFAULT_EXTENSION_TO_LANGUAGE_MAP:
@@ -89,36 +89,78 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        # --- TEMPORARY DIRECT PYTHON EXECUTION TEST FOR WINDOWS ---
+        # --- MODIFIED PYTHON EXECUTION FOR WINDOWS ---
         if language_name == "Python" and platform.system() == "Windows":
-            logger.info("TEMP: Attempting direct Python execution test for Windows.")
-            python_executable = sys.executable # Get current Python interpreter path
+            logger.info("Using sys.executable for Python on Windows.")
+            python_executable = sys.executable
             quoted_python_executable = f'"{python_executable}"'
-            quoted_file_path = f'"{file_path}"' # file_path is already validated
 
-            # Use PowerShell's call operator '&' for executables with paths/args
-            command_string = f"& {quoted_python_executable} -u {quoted_file_path}"
-            logger.debug(f"TEMP: Direct execution command string: {command_string}")
+            # Get arguments (like -u, {file}) from runner_config, skipping the executable part
+            original_template: list[str] | None = self.runner_config.get(language_name, {}).get("run")
+            args_template: list[str] = []
+            if original_template and len(original_template) > 1:
+                args_template = original_template[1:] # Skip the original executable, take rest of args
+            elif original_template and "{file}" in original_template[0]: # e.g. if template was just ["{file}"]
+                args_template = original_template
+            else: # Fallback if template is minimal or unusual
+                args_template = ["-u", "{file}"]
+                logger.warning(f"Python run template for Windows was minimal or not found, defaulting to: {args_template}")
 
-            if self.main_win and hasattr(self.main_win, 'terminal_widget') and self.main_win.terminal_widget:
-                self.main_win.terminal_widget.execute_ide_command(command_string)
-                if hasattr(self.main_win, 'bottom_dock_tab_widget') and hasattr(self.main_win, 'terminal_widget'):
-                    for i in range(self.main_win.bottom_dock_tab_widget.count()):
-                        if self.main_win.bottom_dock_tab_widget.widget(i) == self.main_win.terminal_widget:
-                            self.main_win.bottom_dock_tab_widget.setCurrentIndex(i)
-                            break
-                if hasattr(self.main_win, 'terminal_dock'):
-                    self.main_win.terminal_dock.show()
-                    self.main_win.terminal_dock.raise_()
-                    self.main_win.terminal_widget.setFocus()
-            else:
-                QMessageBox.warning(self.main_win, "Execution Error", "Terminal widget is not available for temp execution.")
-                logger.error("ExecutionCoordinator: Terminal widget not found for temp direct Python execution.")
-            return # Skip normal command processing
-        # --- END TEMPORARY DIRECT PYTHON EXECUTION TEST ---
+            # logger.debug(f"Language: {language_name}, Args template for sys.executable: {args_template}") # Removed temp log
 
-        command_template_list: list[str] | None = self.runner_config.get(language_name, {}).get("run")
-        logger.debug(f"Language: {language_name}, Command template list: {command_template_list}") # Log template
+            # Ensure paths are quoted
+            quoted_file_path = f'"{file_path}"'
+            # output_file_no_ext is not typically used for Python run, but include if necessary for other languages
+            # quoted_output_file_no_ext = f'"{output_file_no_ext}"'
+
+            command_parts = [] # Start with PowerShell call operator and quoted executable
+            # PowerShell call operator '&' is needed if the executable path contains spaces or certain characters.
+            # It's safer to include it.
+            command_parts.append("&")
+            command_parts.append(quoted_python_executable)
+
+            for part_template in args_template:
+                part: str = part_template.replace("{file}", quoted_file_path)
+                # part = part.replace("{output_file}", quoted_output_file_no_ext) # If needed
+                command_parts.append(part)
+
+            # logger.debug(f"Command parts for Python on Windows (using sys.executable): {command_parts}") # Removed temp log
+
+        else: # Original logic for other OS or languages
+            command_template_list: list[str] | None = self.runner_config.get(language_name, {}).get("run")
+            # logger.debug(f"Language: {language_name}, Command template list: {command_template_list}") # Removed temp log
+            if not command_template_list or not isinstance(command_template_list, list):
+                logger.warning(f"No 'run' command configured or invalid format for language '{language_name}' in self.runner_config.")
+                QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured or it's in an invalid format for the language '{language_name}'.")
+                return
+
+            # Ensure paths are quoted to handle spaces
+            quoted_file_path = f'"{file_path}"'
+            quoted_output_file_no_ext = f'"{output_file_no_ext}"'
+
+            command_parts: list[str] = []
+            for part_template in command_template_list:
+                # Replace placeholders with their quoted versions
+                part: str = part_template.replace("{file}", quoted_file_path)
+                part = part.replace("{output_file}", quoted_output_file_no_ext)
+                command_parts.append(part)
+
+            # logger.debug(f"Command parts before Pithon check: {command_parts}") # Removed temp log
+
+            # Check for "Pithon" typo in Python commands (relevant for non-Windows Python or other languages)
+            if language_name == "Python" and command_parts and \
+               (command_parts[0].lower() == "pithon" or command_parts[0].lower() == "pithon.exe"):
+                logger.warning(
+                    "Potential typo 'Pithon' detected as the Python executable in the run command. "
+                    "This might be from 'config/runner_config.json'. "
+                    "Please verify your Python command configuration."
+                )
+                if command_parts[0].lower() in ["pithon", "pithon.exe"]:
+                     corrected_executable = "python.exe" if os.name == 'nt' else "python" # Should be python for non-windows
+                     logger.info(f"Attempting to correct '{command_parts[0]}' to '{corrected_executable}'.")
+                     QMessageBox.information(self.main_win, "Potential Typo", f"Corrected potential typo '{command_parts[0]}' to '{corrected_executable}'. Please check your runner configuration.")
+                     command_parts[0] = corrected_executable
+
         if not command_template_list or not isinstance(command_template_list, list):
             logger.warning(f"No 'run' command configured or invalid format for language '{language_name}' in self.runner_config.")
             QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured or it's in an invalid format for the language '{language_name}'.")
@@ -164,7 +206,7 @@ class ExecutionCoordinator(QObject):
 
         # Construct the full command string to be executed in the terminal
         command_string = " ".join(command_parts)
-        logger.debug(f"Final command string to be executed: {command_string}") # Log final command string
+        # logger.debug(f"Final command string to be executed: {command_string}") # Removed temp log
 
         # Ensure the terminal widget is available and execute the command
         if self.main_win and hasattr(self.main_win, 'terminal_widget') and self.main_win.terminal_widget:

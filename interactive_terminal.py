@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
 from PySide6.QtGui import QFont, QTextCursor, QKeyEvent
-from PySide6.QtCore import Qt, QProcess, QProcessEnvironment, QStandardPaths
+from PySide6.QtCore import Qt, QProcess, QProcessEnvironment
 import platform
 import os
 
@@ -100,12 +100,12 @@ class HighFidelityTerminal(QWidget):
         args = []
 
         if platform.system() == "Windows":
-            powershell_path = QStandardPaths.findExecutable("powershell.exe")
+            powershell_path = QProcess.findExecutable("powershell.exe")
             if powershell_path:
                 shell_executable = powershell_path
                 args = ["-NoLogo", "-NoExit"] # Changed: Removed -Command -
             else:
-                cmd_path = QStandardPaths.findExecutable("cmd.exe")
+                cmd_path = QProcess.findExecutable("cmd.exe")
                 if cmd_path:
                     shell_executable = cmd_path
                     args = ["/K"]
