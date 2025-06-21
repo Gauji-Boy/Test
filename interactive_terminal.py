@@ -103,15 +103,18 @@ class HighFidelityTerminal(QWidget):
             powershell_path = QProcess.findExecutable("powershell.exe")
             if powershell_path:
                 shell_executable = powershell_path
-                args = ["-NoLogo", "-NoExit", "-Command", "-"] # Use -Command - for reading from stdin
+                args = ["-NoLogo", "-NoExit", "-Command", "-"]
             else: # Fallback to cmd.exe
                 cmd_path = QProcess.findExecutable("cmd.exe")
                 if cmd_path:
                     shell_executable = cmd_path
-                    args = ["/K"] # /K keeps cmd open after command
+                    args = ["/K"]
                 else:
-                    self.append_output("Error: Neither powershell.exe nor cmd.exe found.\n")
-                    return
+                    # Specific error if neither PowerShell nor cmd is found
+                    error_msg = "Error: Neither powershell.exe nor cmd.exe found on this Windows system.\n"
+                    self.append_output(error_msg)
+                    print(f"DEBUG: {error_msg}")
+                    return # Explicitly return as no shell can be started
         else:
             # Try to get default shell from environment
             default_shell = os.environ.get("SHELL")
@@ -122,26 +125,33 @@ class HighFidelityTerminal(QWidget):
             elif QProcess.findExecutable("sh"): # Fallback to sh
                 shell_executable = "sh"
             else:
-                self.append_output("Error: No suitable shell found.\n")
-                return
+                # Specific error if no common Unix shell is found
+                error_msg = "Error: No suitable shell (bash, sh, or $SHELL) found on this system.\n"
+                self.append_output(error_msg)
+                print(f"DEBUG: {error_msg}")
+                return # Explicitly return
             args = ["-i"] # Start in interactive mode
 
-        if shell_executable:
+        if shell_executable: # This check is now more of a safeguard
             if args:
                 self.shell_process.start(shell_executable, args)
             else:
                 self.shell_process.start(shell_executable)
 
             if not self.shell_process.waitForStarted(5000): # 5 sec timeout
-                self.append_output(f"Error starting shell: {self.shell_process.errorString()}\n")
+                error_message = f"Error starting shell '{shell_executable}': {self.shell_process.errorString()}\n"
+                self.append_output(error_message)
             else:
-                # On non-Windows, after starting with "-i", the shell might need a moment
-                # or a specific command to fully initialize its interactive prompt.
-                # For cmd.exe with /K, it should show a prompt.
-                # For powershell with -NoExit -Command -, it awaits stdin.
-                pass
+                # For PowerShell with "-Command -", it might need an initial newline to show prompt
+                if platform.system() == "Windows" and "powershell" in shell_executable.lower():
+                    self.shell_process.write("\n".encode('utf-8'))
+                # On non-Windows, -i should be enough.
+                # For cmd.exe with /K, it should show a prompt automatically.
         else:
-             self.append_output("Shell executable path could not be determined.\n")
+             # This case should ideally be caught by earlier checks that return if shell_executable is not set.
+             # If it's reached, it means shell_executable was empty.
+             error_message = "Shell executable path could not be determined (should have been caught earlier).\n"
+             self.append_output(error_message)
 
 
     def _on_shell_output_received(self):

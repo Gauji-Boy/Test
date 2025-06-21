@@ -67,8 +67,16 @@ class ExecutionCoordinator(QObject):
             return
 
         file_path: str | None = self.main_win.editor_file_coordinator.editor_to_path.get(editor)
-        if not file_path or file_path.startswith("untitled:"):
-            QMessageBox.warning(self.main_win, "Execution Error", "Please save the file before running.")
+        if not file_path or file_path.startswith("untitled:") or not os.path.isfile(file_path):
+            # More robust check for actual file
+            error_msg = f"Cannot run. Please save the file and ensure it's a valid file path.\nAttempted path: {file_path}"
+            if file_path and not os.path.isfile(file_path) and os.path.isdir(file_path):
+                 error_msg = f"Cannot run a directory directly. Please select a file to run.\nAttempted path: {file_path}"
+            elif not file_path or file_path.startswith("untitled:"):
+                 error_msg = "Please save the file before running."
+
+            QMessageBox.warning(self.main_win, "Execution Error", error_msg)
+            logger.error(f"Execution Error: Invalid file_path for run request: {file_path}")
             return
 
         _fname, extension = os.path.splitext(file_path)
@@ -96,6 +104,22 @@ class ExecutionCoordinator(QObject):
         if not command_parts:
             QMessageBox.warning(self.main_win, "Execution Error", "Command became empty after processing template.")
             return
+
+        # Check for "Pithon" typo in Python commands
+        if language_name == "Python" and command_parts and \
+           (command_parts[0].lower() == "pithon" or command_parts[0].lower() == "pithon.exe"):
+            logger.warning(
+                "Potential typo 'Pithon' detected as the Python executable in the run command. "
+                "This might be from 'config/runner_config.json'. "
+                "Please verify your Python command configuration."
+            )
+            # Forcing correction to "python" if "pithon" is detected and it's the only part of the executable name
+            if command_parts[0].lower() in ["pithon", "pithon.exe"]:
+                 corrected_executable = "python.exe" if os.name == 'nt' else "python"
+                 logger.info(f"Attempting to correct '{command_parts[0]}' to '{corrected_executable}'.")
+                 QMessageBox.information(self.main_win, "Potential Typo", f"Corrected potential typo '{command_parts[0]}' to '{corrected_executable}'. Please check your runner configuration.")
+                 command_parts[0] = corrected_executable
+
 
         # Construct the full command string to be executed in the terminal
         command_string = " ".join(command_parts)
