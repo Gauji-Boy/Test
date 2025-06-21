@@ -43,6 +43,7 @@ class TerminalInputWidget(QPlainTextEdit):
             # Sanitize pasted text a bit: replace CR LF with LF, and CR with LF
             text_to_paste = text_to_paste.replace('\r\n', '\n').replace('\r', '\n')
             self.parent_terminal.shell_process.write(text_to_paste.encode('utf-8'))
+            return # Explicitly return to prevent superclass call if text sent to shell
         else:
             super().insertFromMimeData(source)
 
@@ -99,24 +100,20 @@ class HighFidelityTerminal(QWidget):
         args = []
 
         if platform.system() == "Windows":
-            # Check for PowerShell first
             powershell_path = QProcess.findExecutable("powershell.exe")
             if powershell_path:
                 shell_executable = powershell_path
-                args = ["-NoLogo", "-NoExit", "-Command", "-"]
-            else: # Fallback to cmd.exe
+                args = ["-NoLogo", "-NoExit"] # Changed: Removed -Command -
+            else:
                 cmd_path = QProcess.findExecutable("cmd.exe")
                 if cmd_path:
                     shell_executable = cmd_path
                     args = ["/K"]
                 else:
-                    # Specific error if neither PowerShell nor cmd is found
                     error_msg = "Error: Neither powershell.exe nor cmd.exe found on this Windows system.\n"
                     self.append_output(error_msg)
-                    print(f"DEBUG: {error_msg}")
-                    return # Explicitly return as no shell can be started
+                    return
         else:
-            # Try to get default shell from environment
             default_shell = os.environ.get("SHELL")
             if default_shell and QProcess.findExecutable(default_shell):
                 shell_executable = default_shell
