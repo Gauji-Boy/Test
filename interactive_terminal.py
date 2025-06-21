@@ -139,11 +139,12 @@ class HighFidelityTerminal(QWidget):
                 error_message = f"Error starting shell '{shell_executable}': {self.shell_process.errorString()}\n"
                 self.append_output(error_message)
             else:
-                # For PowerShell with "-Command -", it might need an initial newline to show prompt
-                if platform.system() == "Windows" and "powershell" in shell_executable.lower():
-                    self.shell_process.write("\n".encode('utf-8'))
+                # For PowerShell with "-NoLogo -NoExit", it might need an initial newline to show prompt
+                # if platform.system() == "Windows" and "powershell" in shell_executable.lower():
+                #    self.shell_process.write("\n".encode('utf-8')) # Temporarily removed to check prompt duplication
                 # On non-Windows, -i should be enough.
                 # For cmd.exe with /K, it should show a prompt automatically.
+                pass # Ensure 'else' block is not empty if the 'if' is commented out
         else:
              # This case should ideally be caught by earlier checks that return if shell_executable is not set.
              # If it's reached, it means shell_executable was empty.
