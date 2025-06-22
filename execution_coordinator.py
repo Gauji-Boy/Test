@@ -1,6 +1,6 @@
 import os
 import logging
-from PySide6.QtCore import QObject, Slot, QProcess
+from PySide6.QtCore import QObject, Slot, QProcess, Signal
 from PySide6.QtWidgets import QMessageBox, QListWidgetItem, QTreeWidgetItem
 from code_editor import CodeEditor
 from config_manager import ConfigManager
@@ -20,6 +20,13 @@ class ExecutionCoordinator(QObject):
     config_manager: ConfigManager
     runner_config: dict[str, Any]
     extension_to_language_map: dict[str, str]
+
+    # Signals for TerminalWidget interaction
+    terminal_output_received = Signal(str)
+    terminal_clear_requested = Signal()
+    terminal_run_command_requested = Signal(str)
+    terminal_start_interactive_requested = Signal(list, str) # command, working_directory
+    terminal_run_sequence_requested = Signal(list, str, str) # commands_list, temp_file_path, selected_language
 
     def __init__(self) -> None: # Removed main_window parameter
         super().__init__()
@@ -87,16 +94,29 @@ class ExecutionCoordinator(QObject):
         working_dir: str = os.path.dirname(file_path) or os.getcwd()
         output_file_no_ext: str = os.path.splitext(file_path)[0]
 
-        command_parts: list[str] = []
-        for part_template in command_template_list:
-            part: str = part_template.replace("{file}", file_path)
-            part = part.replace("{output_file}", output_file_no_ext)
-            command_parts.append(part)
+        # Construct the full command string
+        full_command: str = ""
+        if language_name == "Python":
+            # For Python, specifically handle the -u flag and quoting
+            # This assumes command_template_list is something like ["python", "-u", "{file}"]
+            # and we want to join it into a single string for the shell.
+            # The -u flag is important for unbuffered output in Python.
+            command_parts = [part_template.replace("{file}", file_path) for part_template in command_template_list]
+            full_command = " ".join(f'"{p}"' if ' ' in p and not p.startswith('"') else p for p in command_parts)
+        else:
+            # For other languages, join parts and replace placeholders
+            command_parts = []
+            for part_template in command_template_list:
+                part: str = part_template.replace("{file}", file_path)
+                part = part.replace("{output_file}", output_file_no_ext)
+                command_parts.append(part)
+            full_command = " ".join(f'"{p}"' if ' ' in p and not p.startswith('"') else p for p in command_parts)
 
-        if not command_parts:
+        if not full_command:
             QMessageBox.warning(self.main_win, "Execution Error", "Command became empty after processing template.")
             return
-        self.main_win.process_manager.execute(command_parts, working_dir)
+        
+        self.terminal_run_command_requested.emit(full_command)
 
     @Slot()
     def _handle_debug_request(self) -> None:
@@ -147,18 +167,15 @@ class ExecutionCoordinator(QObject):
         for path, lines_set in self.active_breakpoints.items():
             self.main_win.debug_manager.update_internal_breakpoints(path, lines_set)
 
-        self.main_win.debug_manager.start_session(cast(str, file_path))
+        # self.main_win.debug_manager.start_session(cast(str, file_path)) # Old way
+        # The debug manager will now emit signals to the terminal for starting interactive processes
+        self.terminal_start_interactive_requested.emit(command_parts, working_dir) # New way
 
 
     @Slot(str)
     def _handle_process_output(self, output_str: str) -> None:
         if not self.main_win: return
-        if hasattr(self.main_win, 'command_output_viewer') and self.main_win.command_output_viewer:
-            self.main_win.command_output_viewer.append_output(output_str)
-            if hasattr(self.main_win, 'bottom_dock_tab_widget'):
-                self.main_win.bottom_dock_tab_widget.setCurrentWidget(self.main_win.command_output_viewer)
-        else:
-            logger.info(f"Process Output (no command_output_viewer): {output_str}")
+        self.terminal_output_received.emit(output_str)
 
     @Slot()
     def _handle_process_started(self) -> None:
@@ -170,13 +187,8 @@ class ExecutionCoordinator(QObject):
         if hasattr(self.main_win, 'debug_action_button'):
             self.main_win.debug_action_button.setEnabled(False)
 
-        if hasattr(self.main_win, 'command_output_viewer') and self.main_win.command_output_viewer:
-            self.main_win.command_output_viewer.clear_output()
-            if hasattr(self.main_win, 'bottom_dock_tab_widget'):
-                self.main_win.bottom_dock_tab_widget.setCurrentWidget(self.main_win.command_output_viewer)
-            if hasattr(self.main_win, 'terminal_dock'):
-                self.main_win.terminal_dock.show()
-                self.main_win.terminal_dock.raise_()
+        self.terminal_clear_requested.emit()
+        # The terminal dock will be shown by MainWindow's setup_terminal_dock
 
     @Slot(int, QProcess.ExitStatus)
     def _handle_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
@@ -185,8 +197,7 @@ class ExecutionCoordinator(QObject):
         message: str = f"Process finished {status_text}."
         logger.info(message)
         self.main_win.status_bar.showMessage(message, 5000)
-        if hasattr(self.main_win, 'command_output_viewer') and self.main_win.command_output_viewer:
-            self.main_win.command_output_viewer.append_output(f"\n--- {message} ---\n")
+        self.terminal_output_received.emit(f"\n--- {message} ---\n")
         if hasattr(self.main_win, 'run_action_button'):
             self.main_win.run_action_button.setEnabled(True)
         if hasattr(self.main_win, 'debug_action_button'):
@@ -199,10 +210,7 @@ class ExecutionCoordinator(QObject):
         logger.error(f"Process execution error: {error_message}")
         QMessageBox.critical(self.main_win, "Process Error", full_error_message)
         self.main_win.status_bar.showMessage(full_error_message, 5000)
-        if hasattr(self.main_win, 'command_output_viewer') and self.main_win.command_output_viewer:
-            self.main_win.command_output_viewer.append_output(f"\n--- ERROR: {error_message} ---\n")
-            if hasattr(self.main_win, 'bottom_dock_tab_widget'):
-                self.main_win.bottom_dock_tab_widget.setCurrentWidget(self.main_win.command_output_viewer)
+        self.terminal_output_received.emit(f"\n--- ERROR: {error_message} ---\n")
         if hasattr(self.main_win, 'run_action_button'):
             self.main_win.run_action_button.setEnabled(True)
         if hasattr(self.main_win, 'debug_action_button'):

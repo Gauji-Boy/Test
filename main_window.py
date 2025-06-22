@@ -10,14 +10,13 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QModelIndex, QThreadPool, 
 from file_explorer import FileExplorer
 from code_editor import CodeEditor # Assuming CodeEditor has _InternalCodeEditor
 from debug_manager import DebugManager
-from interactive_terminal import InteractiveTerminal
-from command_output_viewer import CommandOutputViewer
 from network_manager import NetworkManager, NetworkMessageType
 from connection_dialog import ConnectionDialog
 from ai_controller import AIController
 from file_manager import FileManager
 from session_manager import SessionManager
 from process_manager import ProcessManager
+from terminal_widget import TerminalWidget
 
 from editor_file_coordinator import EditorFileCoordinator
 from user_session_coordinator import UserSessionCoordinator
@@ -49,8 +48,6 @@ class MainWindow(QMainWindow):
     tab_widget: QTabWidget
     status_bar: QStatusBar
     file_explorer: FileExplorer
-    terminal_widget: InteractiveTerminal
-    command_output_viewer: CommandOutputViewer
     control_status_label: QLabel
     recent_projects_menu: QMenu
     language_selector: QComboBox
@@ -69,7 +66,6 @@ class MainWindow(QMainWindow):
     stop_action: QAction
     left_tab_widget: QTabWidget
     left_dock_widget: QDockWidget
-    terminal_dock: QDockWidget
     bottom_dock_tab_widget: QTabWidget
     variables_panel: QTreeWidget
     call_stack_panel: QListWidget
@@ -78,6 +74,8 @@ class MainWindow(QMainWindow):
     undo_action: QAction
     redo_action: QAction
     welcome_page: Optional[QWidget] # WelcomeScreen type, but QWidget for generality
+    terminal_dock_widget: QDockWidget # Added
+    terminal_widget: TerminalWidget # Added
 
     # Internal State
     threadpool: QThreadPool
@@ -150,7 +148,6 @@ class MainWindow(QMainWindow):
 
         self.setup_status_bar()
         self.setup_toolbar()
-        self.command_output_viewer = CommandOutputViewer(self)
 
         self.debug_manager.session_started.connect(self.execution_coordinator._on_debug_session_started)
         self.debug_manager.session_stopped.connect(self.execution_coordinator._on_debug_session_stopped)
@@ -159,6 +156,7 @@ class MainWindow(QMainWindow):
         self.setup_debugger_toolbar()
 
         self.setup_ui()
+        self.setup_terminal_dock() # Added
         self.setup_menu()
         self.setup_network_connections()
 
@@ -180,10 +178,18 @@ class MainWindow(QMainWindow):
         self.session_manager.session_saved.connect(self.user_session_coordinator._handle_session_saved_confirmation)
         self.session_manager.session_error.connect(self.user_session_coordinator._handle_session_error)
 
+        # Connect process manager signals to execution coordinator, which then routes to terminal
         self.process_manager.output_received.connect(self.execution_coordinator._handle_process_output)
         self.process_manager.process_started.connect(self.execution_coordinator._handle_process_started)
         self.process_manager.process_finished.connect(self.execution_coordinator._handle_process_finished)
         self.process_manager.process_error.connect(self.execution_coordinator._handle_process_error)
+
+        # Connect execution coordinator signals to terminal widget
+        self.execution_coordinator.terminal_output_received.connect(self.terminal_widget.append_output)
+        self.execution_coordinator.terminal_clear_requested.connect(self.terminal_widget.clear_output)
+        self.execution_coordinator.terminal_run_command_requested.connect(self.terminal_widget.send_command_to_shell)
+        self.execution_coordinator.terminal_start_interactive_requested.connect(self.terminal_widget.start_interactive_process)
+        self.execution_coordinator.terminal_run_sequence_requested.connect(self.terminal_widget.run_command_sequence)
 
         self.update_ui_for_control_state()
         self._active_editor_document = None
@@ -262,7 +268,6 @@ class MainWindow(QMainWindow):
             self.file_explorer.set_root_path(path)
             if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                 self.left_dock_widget.setVisible(True)
-            self.terminal_widget.start_shell(path)
             if add_to_recents:
                 logger.info(f"About to add project to recents: {path}")
                 self.user_session_coordinator.add_recent_project(path)
@@ -272,7 +277,6 @@ class MainWindow(QMainWindow):
                 self.file_explorer.set_root_path(parent_dir)
                 if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                     self.left_dock_widget.setVisible(True)
-                self.terminal_widget.start_shell(parent_dir)
                 if add_to_recents:
                     logger.info(f"About to add project to recents: {parent_dir}")
                     self.user_session_coordinator.add_recent_project(parent_dir)
@@ -281,7 +285,6 @@ class MainWindow(QMainWindow):
                 self.file_explorer.set_root_path(current_dir)
                 if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                     self.left_dock_widget.setVisible(True)
-                self.terminal_widget.start_shell(current_dir)
                 if add_to_recents:
                     logger.info(f"About to add project to recents: {current_dir}")
                     self.user_session_coordinator.add_recent_project(current_dir)
@@ -292,7 +295,6 @@ class MainWindow(QMainWindow):
             self.file_explorer.set_root_path(default_path)
             if hasattr(self, 'left_dock_widget') and not self.left_dock_widget.isVisible():
                 self.left_dock_widget.setVisible(True)
-            self.terminal_widget.start_shell(default_path)
             if add_to_recents:
                 logger.info(f"About to add project to recents: {default_path}")
                 self.user_session_coordinator.add_recent_project(default_path)
@@ -332,14 +334,14 @@ class MainWindow(QMainWindow):
         self.left_dock_widget.setWidget(self.left_tab_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock_widget)
 
-        self.terminal_dock = QDockWidget("Terminal", self)
-        self.terminal_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
-        self.terminal_widget = InteractiveTerminal(self)
-        self.bottom_dock_tab_widget = QTabWidget()
-        self.bottom_dock_tab_widget.addTab(self.terminal_widget, "Shell")
-        self.bottom_dock_tab_widget.addTab(self.command_output_viewer, "Output")
-        self.terminal_dock.setWidget(self.bottom_dock_tab_widget)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
+    def setup_terminal_dock(self) -> None:
+        self.terminal_widget = TerminalWidget(self)
+        self.terminal_dock_widget = QDockWidget("Terminal", self)
+        self.terminal_dock_widget.setWidget(self.terminal_widget)
+        self.terminal_dock_widget.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock_widget)
+        self.terminal_dock_widget.setVisible(True) # Start visible for now
+
 
     def setup_menu(self) -> None:
         menu_bar: QMenuBar = self.menuBar()
@@ -388,8 +390,10 @@ class MainWindow(QMainWindow):
         format_code_action.triggered.connect(self.format_current_code)
         edit_menu.addAction(format_code_action)
 
-        # View Menu (Placeholder for now)
+        # View Menu
         view_menu = menu_bar.addMenu("&View")
+        view_menu.addAction(self.left_dock_widget.toggleViewAction()) # Toggle Explorer/Debugger
+        view_menu.addAction(self.terminal_dock_widget.toggleViewAction()) # Toggle Terminal
 
         # Run Menu
         run_menu = menu_bar.addMenu("&Run")
@@ -712,15 +716,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        # The RUNNER_CONFIG logic is now handled by ExecutionCoordinator.
+        # The command construction and execution logic is now handled by ExecutionCoordinator.
         # This section is likely dead code and can be removed or commented out.
         # command_template_list = self.RUNNER_CONFIG.get(language_name)
         # if not command_template_list:
         #     QMessageBox.warning(self, "Execution Error", f"No 'run' command is configured for the language '{language_name}'.")
         #     return
-
-        working_dir = os.path.dirname(file_path) or os.getcwd()
-        output_file_no_ext = os.path.splitext(file_path)[0]
 
         # The command construction and execution logic is now handled by ExecutionCoordinator.
         # This section is likely dead code and can be removed or commented out.
@@ -735,6 +736,9 @@ class MainWindow(QMainWindow):
         #     return
         #
         # self.process_manager.execute(command_parts, working_dir)
+
+        # Delegate to ExecutionCoordinator, which will now use terminal_widget.send_command_to_shell
+        self.execution_coordinator._handle_run_request()
 
     # _run_diagnostic_test is removed as its functionality is superseded by ProcessManager.
 
@@ -994,28 +998,35 @@ class MainWindow(QMainWindow):
             )
             new_path = new_path_tuple[0]
 
-            if not new_path:
-                self.status_bar.showMessage("Save operation cancelled.", 3000)
+            if new_path:
+                path_to_save = new_path
+            else:
+                self.status_bar.showMessage("Save As operation cancelled.", 3000)
                 return False
-            path_to_save = new_path
         else:
             path_to_save = current_path_placeholder
 
         if not path_to_save:
-             QMessageBox.critical(self, "Save Error", "No file path determined for saving.")
-             return False
+            self.status_bar.showMessage("No valid path to save to.", 3000)
+            return False
 
         if path_to_save.lower().endswith(".py"):
             try:
+                # Assuming self.is_updating_from_network is a flag to prevent re-triggering textChanged
+                # when programmatically setting text. This flag needs to be defined in MainWindow.
+                # For now, I'll assume it's defined or handle it carefully.
+                # It's better to pass this responsibility to FileManager or a dedicated formatter.
+                # For now, I'll add it here as it was in the original misplaced code.
+                # This flag is not defined in MainWindow, so I will remove it for now.
+                # self.is_updating_from_network = True
                 formatted_content = black.format_str(content_to_save, mode=black.FileMode())
                 if formatted_content != content_to_save:
-                    self.is_updating_from_network = True
                     current_cursor_pos = editor.textCursor().position()
                     editor.setPlainText(formatted_content)
                     new_cursor = editor.textCursor()
                     new_cursor.setPosition(min(current_cursor_pos, len(formatted_content)))
                     editor.setTextCursor(new_cursor)
-                    self.is_updating_from_network = False
+                    # self.is_updating_from_network = False
                     content_to_save = formatted_content
             except black.parsing.LibCSTError as e:
                 QMessageBox.critical(self, "Formatting Error", f"Syntax error in Python code. Cannot format and save:\n{e}")
@@ -1027,6 +1038,286 @@ class MainWindow(QMainWindow):
         self.file_manager.save_file(editor, content_to_save, path_to_save)
         QApplication.restoreOverrideCursor()
         return True
+
+        if not path_to_save:
+            self.status_bar.showMessage("No valid path to save to.", 3000)
+            return False
+
+        try:
+            # Delegate the actual file saving to FileManager
+            self.file_manager.save_file(path_to_save, content_to_save)
+            
+            # Update editor's internal path if it was an untitled file being saved for the first time
+            if is_untitled_file and path_to_save:
+                self.editor_file_coordinator.update_editor_path(editor, path_to_save)
+                # Also update the tab title to reflect the new file name
+                tab_index = self.tab_widget.indexOf(editor)
+                if tab_index != -1:
+                    self.tab_widget.setTabText(tab_index, os.path.basename(path_to_save))
+
+            self.status_bar.showMessage(f"File saved: {path_to_save}", 3000)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save file: {e}")
+            self.status_bar.showMessage(f"Error saving file: {e}", 5000)
+            return False
+
+    def format_current_code(self):
+        editor = self._get_current_code_editor()
+        if not editor:
+            self.status_bar.showMessage("No active editor to format.", 3000)
+            return
+
+        current_text = editor.toPlainText()
+        file_path = self.editor_to_path.get(editor)
+        if not file_path:
+            self.status_bar.showMessage("Cannot format unsaved or untitled file.", 3000)
+            return
+
+        _, extension = os.path.splitext(file_path)
+        language_name = self.extension_to_language_map_config.get(extension.lower())
+
+        if language_name == "Python":
+            try:
+                formatted_code = black.format_str(current_text, mode=black.FileMode())
+                if formatted_code != current_text:
+                    editor.setPlainText(formatted_code)
+                    self.status_bar.showMessage("Python code formatted successfully.", 3000)
+                else:
+                    self.status_bar.showMessage("Python code is already well-formatted.", 3000)
+            except black.NothingChanged:
+                self.status_bar.showMessage("Python code is already well-formatted.", 3000)
+            except Exception as e:
+                QMessageBox.warning(self, "Formatting Error", f"Failed to format Python code: {e}")
+                self.status_bar.showMessage(f"Python formatting failed: {e}", 5000)
+        else:
+            self.status_bar.showMessage(f"Formatting not supported for {language_name} files.", 3000)
+
+    def _update_undo_redo_actions(self):
+        editor = self._get_current_code_editor()
+        if editor and editor.document():
+            self.undo_action.setEnabled(editor.document().isUndoAvailable())
+            self.redo_action.setEnabled(editor.document().isRedoAvailable())
+        else:
+            self.undo_action.setEnabled(False)
+            self.redo_action.setEnabled(False)
+
+    def _undo_current_editor(self):
+        editor = self._get_current_code_editor()
+        if editor and editor.document():
+            editor.document().undo()
+
+    def _redo_current_editor(self):
+        editor = self._get_current_code_editor()
+        if editor and editor.document():
+            editor.document().redo()
+
+    def on_file_tree_context_menu(self, position: QPoint):
+        index = self.file_explorer.indexAt(position)
+        if not index.isValid():
+            return
+
+        file_path = self.file_explorer.model.filePath(index)
+        is_dir = self.file_explorer.model.isDir(index)
+
+        menu = QMenu(self)
+
+        if not is_dir:
+            open_action = QAction("Open", self)
+            open_action.triggered.connect(lambda: self.editor_file_coordinator.open_new_tab(file_path))
+            menu.addAction(open_action)
+            menu.addSeparator()
+
+        # Rename Action
+        rename_action = QAction("Rename", self)
+        rename_action.triggered.connect(lambda: self._rename_file_or_folder(file_path, index))
+        menu.addAction(rename_action)
+
+        # Delete Action
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(lambda: self._delete_file_or_folder(file_path))
+        menu.addAction(delete_action)
+
+        menu.addSeparator()
+
+        # New File/Folder actions (always available on a directory or the root)
+        if is_dir:
+            new_file_action = QAction("New File", self)
+            new_file_action.triggered.connect(lambda: self._create_new_file_in_context(file_path))
+            menu.addAction(new_file_action)
+
+            new_folder_action = QAction("New Folder", self)
+            new_folder_action.triggered.connect(lambda: self._create_new_folder_in_context(file_path))
+            menu.addAction(new_folder_action)
+        else: # If a file is selected, offer to create new in its parent directory
+            parent_dir = os.path.dirname(file_path)
+            new_file_action = QAction("New File (in parent)", self)
+            new_file_action.triggered.connect(lambda: self._create_new_file_in_context(parent_dir))
+            menu.addAction(new_file_action)
+
+            new_folder_action = QAction("New Folder (in parent)", self)
+            new_folder_action.triggered.connect(lambda: self._create_new_folder_in_context(parent_dir))
+            menu.addAction(new_folder_action)
+
+        menu.exec(self.file_explorer.mapToGlobal(position))
+
+    def _rename_file_or_folder(self, old_path: str, index: QModelIndex):
+        is_dir = self.file_explorer.model.isDir(index)
+        item_type = "folder" if is_dir else "file"
+        
+        old_name = os.path.basename(old_path)
+        new_name, ok = QInputDialog.getText(self, f"Rename {item_type}", f"Enter new name for {old_name}:",
+                                           QLineEdit.Normal, old_name)
+        if not ok or not new_name or new_name == old_name:
+            return
+
+        parent_dir = os.path.dirname(old_path)
+        new_path = os.path.join(parent_dir, new_name)
+
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, "Rename Error", f"A {item_type} named '{new_name}' already exists in this location.")
+            return
+
+        try:
+            os.rename(old_path, new_path)
+            self.file_explorer.model.layoutChanged.emit() # Notify model of change
+            self.status_bar.showMessage(f"Renamed '{old_name}' to '{new_name}'.", 3000)
+
+            # If it was an open file, update its path in editor_to_path and path_to_editor
+            if not is_dir and old_path in self.path_to_editor:
+                editor = self.path_to_editor[old_path]
+                del self.path_to_editor[old_path]
+                self.path_to_editor[new_path] = editor
+                self.editor_to_path[editor] = new_path
+                # Update tab title
+                tab_index = self.tab_widget.indexOf(editor)
+                if tab_index != -1:
+                    self.tab_widget.setTabText(tab_index, new_name)
+            
+            # Update recent projects if the renamed item was a project root
+            self.user_session_coordinator.handle_path_renamed(old_path, new_path)
+
+        except OSError as e:
+            QMessageBox.critical(self, "Rename Error", f"Failed to rename {item_type}: {e}")
+
+    def _delete_file_or_folder(self, path_to_delete: str):
+        is_dir = os.path.isdir(path_to_delete)
+        item_type = "folder" if is_dir else "file"
+        item_name = os.path.basename(path_to_delete)
+
+        reply = QMessageBox.question(self, f"Confirm Delete {item_type.capitalize()}",
+                                     f"Are you sure you want to delete '{item_name}' and its contents (if any)? This cannot be undone.",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        try:
+            if is_dir:
+                shutil.rmtree(path_to_delete)
+            else:
+                os.remove(path_to_delete)
+            
+            self.file_explorer.model.layoutChanged.emit() # Notify model of change
+            self.status_bar.showMessage(f"Deleted {item_type}: {item_name}", 3000)
+
+            # If it was an open file, close its tab
+            if not is_dir and path_to_delete in self.path_to_editor:
+                editor_to_close = self.path_to_editor[path_to_delete]
+                tab_index = self.tab_widget.indexOf(editor_to_close)
+                if tab_index != -1:
+                    self.tab_widget.removeTab(tab_index)
+                    editor_to_close.deleteLater()
+                    del self.editor_to_path[editor_to_close]
+                    del self.path_to_editor[path_to_delete]
+            
+            # Update recent projects if the deleted item was a project root
+            self.user_session_coordinator.handle_path_deleted(path_to_delete)
+
+        except OSError as e:
+            QMessageBox.critical(self, "Delete Error", f"Failed to delete {item_type}: {e}")
+
+    def _create_new_file_in_context(self, target_directory: str):
+        file_name, ok = QInputDialog.getText(self, "New File", "Enter new file name:", QLineEdit.Normal, "")
+        if not ok or not file_name:
+            return
+
+        full_path = os.path.join(target_directory, file_name)
+
+        if os.path.exists(full_path):
+            QMessageBox.warning(self, "File Exists", "A file or folder with this name already exists.")
+            return
+
+        try:
+            with open(full_path, 'w', encoding='utf-8') as f:
+                pass # Create an empty file
+            self.file_explorer.model.layoutChanged.emit() # Notify model of change
+            self.editor_file_coordinator.open_new_tab(full_path) # Open the new file in the editor
+            self.status_bar.showMessage(f"Created new file: {full_path}", 3000)
+        except OSError as e:
+            QMessageBox.critical(self, "Error Creating File", f"Failed to create file '{file_name}': {e}")
+
+    def _create_new_folder_in_context(self, target_directory: str):
+        folder_name, ok = QInputDialog.getText(self, "New Folder", "Enter new folder name:", QLineEdit.Normal, "")
+        if not ok or not folder_name:
+            return
+
+        full_path = os.path.join(target_directory, folder_name)
+
+        if os.path.exists(full_path):
+            QMessageBox.warning(self, "Folder Exists", "A file or folder with this name already exists.")
+            return
+
+        try:
+            os.makedirs(full_path)
+            self.file_explorer.model.layoutChanged.emit() # Notify model of change
+            self.status_bar.showMessage(f"Created new folder: {full_path}", 3000)
+        except OSError as e:
+            QMessageBox.critical(self, "Error Creating Folder", f"Failed to create folder '{folder_name}': {e}")
+
+    def open_new_ai_assistant(self):
+        if self._current_ai_controller is None:
+            self._current_ai_controller = AIController(
+                editor_file_coordinator=self.editor_file_coordinator,
+                user_session_coordinator=self.user_session_coordinator,
+                execution_coordinator=self.execution_coordinator,
+                main_window_ref=self # Pass reference to main window
+            )
+            self._current_ai_controller.assistant_closed.connect(self._on_ai_assistant_closed)
+        self._current_ai_controller.show_assistant()
+
+    @Slot()
+    def _on_ai_assistant_closed(self):
+        logger.info("AI Assistant window closed. Clearing reference.")
+        if self._current_ai_controller:
+            self._current_ai_controller.deleteLater() # Ensure proper cleanup
+            self._current_ai_controller = None
+
+    def closeEvent(self, event: QCloseEvent):
+        # Add this line to properly shut down the terminal's process
+        if self.terminal_widget:
+            self.terminal_widget.close()
+
+        # Save session before closing
+        self.user_session_coordinator.save_session()
+
+        # Clean up temporary files if any
+        # This is a placeholder; actual temp file management might be more complex
+        temp_dir = tempfile.gettempdir()
+        app_temp_prefix = "aether_editor_" # Or whatever prefix you use for your temp files
+        for item in os.listdir(temp_dir):
+            if item.startswith(app_temp_prefix):
+                full_path = os.path.join(temp_dir, item)
+                try:
+                    if os.path.isfile(full_path):
+                        os.remove(full_path)
+                    elif os.path.isdir(full_path):
+                        shutil.rmtree(full_path)
+                    logger.info(f"Cleaned up temporary item: {full_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary item {full_path}: {e}")
+
+        super().closeEvent(event)
+
 
     @Slot(object, str, str) # widget_ref (editor), saved_path, saved_content
     def _handle_file_saved(self, editor_widget, saved_path, saved_content):
