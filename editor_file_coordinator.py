@@ -136,8 +136,6 @@ class EditorFileCoordinator(QObject):
             self.main_win.tab_widget.setTabText(idx, os.path.basename(saved_path))
             self.main_win.tab_widget.setTabToolTip(idx, saved_path)
         self.main_win.status_bar.showMessage(f"File '{os.path.basename(saved_path)}' saved.", 3000)
-        if hasattr(self.main_win, 'file_explorer'):
-            self.main_win.file_explorer.refresh_tree()
 
     @Slot(object, str, str)
     def _handle_file_save_error(self, widget: QWidget, path: str, error: str) -> None:

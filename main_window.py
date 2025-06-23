@@ -16,7 +16,7 @@ from ai_controller import AIController
 from file_manager import FileManager
 from session_manager import SessionManager
 from process_manager import ProcessManager
-from terminal_widget import TerminalWidget
+from terminal.terminal_container import TerminalContainer
 
 from editor_file_coordinator import EditorFileCoordinator
 from user_session_coordinator import UserSessionCoordinator
@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
     redo_action: QAction
     welcome_page: Optional[QWidget] # WelcomeScreen type, but QWidget for generality
     terminal_dock_widget: QDockWidget # Added
-    terminal_widget: TerminalWidget # Added
+    terminal_widget: TerminalContainer # Added
 
     # Internal State
     threadpool: QThreadPool
@@ -185,11 +185,9 @@ class MainWindow(QMainWindow):
         self.process_manager.process_error.connect(self.execution_coordinator._handle_process_error)
 
         # Connect execution coordinator signals to terminal widget
-        self.execution_coordinator.terminal_output_received.connect(self.terminal_widget.append_output)
-        self.execution_coordinator.terminal_clear_requested.connect(self.terminal_widget.clear_output)
-        self.execution_coordinator.terminal_run_command_requested.connect(self.terminal_widget.send_command_to_shell)
-        self.execution_coordinator.terminal_start_interactive_requested.connect(self.terminal_widget.start_interactive_process)
-        self.execution_coordinator.terminal_run_sequence_requested.connect(self.terminal_widget.run_command_sequence)
+        self.execution_coordinator.terminal_output_received.connect(self.terminal_widget.run_command) # This will now delegate to the active tab
+        self.execution_coordinator.terminal_clear_requested.connect(self.terminal_widget.run_command) # This will now delegate to the active tab
+        self.execution_coordinator.run_command_in_terminal.connect(self.terminal_widget.run_command)
 
         self.update_ui_for_control_state()
         self._active_editor_document = None
@@ -306,6 +304,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tab_widget)
         self.tab_widget.currentChanged.connect(self._update_status_bar_and_language_selector_on_tab_change)
         self.tab_widget.currentChanged.connect(self._update_undo_redo_actions)
+        # self.tab_widget.currentChanged.connect(self._on_active_editor_changed) # Removed, as this method does not exist
+        # The terminal's current directory should be managed by the terminal itself, not directly by editor tab changes.
+        # Commands are delegated to the active terminal tab via execution_coordinator.run_command_in_terminal.
 
         debugger_main_widget = QWidget()
         debugger_layout = QVBoxLayout(debugger_main_widget)
@@ -335,7 +336,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock_widget)
 
     def setup_terminal_dock(self) -> None:
-        self.terminal_widget = TerminalWidget(self)
+        self.terminal_widget = TerminalContainer(self)
         self.terminal_dock_widget = QDockWidget("Terminal", self)
         self.terminal_dock_widget.setWidget(self.terminal_widget)
         self.terminal_dock_widget.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
@@ -394,6 +395,12 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("&View")
         view_menu.addAction(self.left_dock_widget.toggleViewAction()) # Toggle Explorer/Debugger
         view_menu.addAction(self.terminal_dock_widget.toggleViewAction()) # Toggle Terminal
+
+        # Add "New Terminal" action to View menu
+        new_terminal_action = QAction("New Terminal (Ctrl+`)", self)
+        new_terminal_action.setShortcut(Qt.ControlModifier | Qt.Key.Key_QuoteLeft) # Ctrl + `
+        new_terminal_action.triggered.connect(self.terminal_widget.create_new_terminal)
+        view_menu.addAction(new_terminal_action)
 
         # Run Menu
         run_menu = menu_bar.addMenu("&Run")
@@ -1295,7 +1302,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         # Add this line to properly shut down the terminal's process
         if self.terminal_widget:
-            self.terminal_widget.close()
+            self.terminal_widget.shutdown()
 
         # Save session before closing
         self.user_session_coordinator.save_session()

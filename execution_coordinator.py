@@ -25,8 +25,7 @@ class ExecutionCoordinator(QObject):
     terminal_output_received = Signal(str)
     terminal_clear_requested = Signal()
     terminal_run_command_requested = Signal(str)
-    terminal_start_interactive_requested = Signal(list, str) # command, working_directory
-    terminal_run_sequence_requested = Signal(list, str, str) # commands_list, temp_file_path, selected_language
+    run_command_in_terminal = Signal(str) # New signal for direct command execution
 
     def __init__(self) -> None: # Removed main_window parameter
         super().__init__()
@@ -85,38 +84,17 @@ class ExecutionCoordinator(QObject):
             QMessageBox.warning(self.main_win, "Execution Error", f"No language is configured for file type '{extension}'.")
             return
 
-        command_template_list: list[str] | None = self.runner_config.get(language_name, {}).get("run")
-        if not command_template_list or not isinstance(command_template_list, list):
-            logger.warning(f"No 'run' command configured or invalid format for language '{language_name}' in self.runner_config.")
-            QMessageBox.warning(self.main_win, "Execution Error", f"No 'run' command is configured or it's in an invalid format for the language '{language_name}'.")
-            return
-
-        working_dir: str = os.path.dirname(file_path) or os.getcwd()
-        output_file_no_ext: str = os.path.splitext(file_path)[0]
-
-        # Construct the full command string
-        full_command: str = ""
+        command_string: str = ""
         if language_name == "Python":
-            # For Python, specifically handle the -u flag and quoting
-            # This assumes command_template_list is something like ["python", "-u", "{file}"]
-            # and we want to join it into a single string for the shell.
-            # The -u flag is important for unbuffered output in Python.
-            command_parts = [part_template.replace("{file}", file_path) for part_template in command_template_list]
-            full_command = " ".join(f'"{p}"' if ' ' in p and not p.startswith('"') else p for p in command_parts)
+            command_string = f'python -u "{file_path}"'
+        elif language_name == "C":
+            output_path = os.path.splitext(file_path)[0]
+            command_string = f'gcc "{file_path}" -o "{output_path}" && "{output_path}"'
         else:
-            # For other languages, join parts and replace placeholders
-            command_parts = []
-            for part_template in command_template_list:
-                part: str = part_template.replace("{file}", file_path)
-                part = part.replace("{output_file}", output_file_no_ext)
-                command_parts.append(part)
-            full_command = " ".join(f'"{p}"' if ' ' in p and not p.startswith('"') else p for p in command_parts)
-
-        if not full_command:
-            QMessageBox.warning(self.main_win, "Execution Error", "Command became empty after processing template.")
+            self.terminal_output_received.emit(f"Language '{language_name}' not configured for running.\n")
             return
-        
-        self.terminal_run_command_requested.emit(full_command)
+
+        self.run_command_in_terminal.emit(command_string)
 
     @Slot()
     def _handle_debug_request(self) -> None:
@@ -167,9 +145,26 @@ class ExecutionCoordinator(QObject):
         for path, lines_set in self.active_breakpoints.items():
             self.main_win.debug_manager.update_internal_breakpoints(path, lines_set)
 
-        # self.main_win.debug_manager.start_session(cast(str, file_path)) # Old way
-        # The debug manager will now emit signals to the terminal for starting interactive processes
-        self.terminal_start_interactive_requested.emit(command_parts, working_dir) # New way
+        # For debugging, we need to send the commands to the terminal's process input.
+        # This will typically involve setting up the debugger environment and then running the script.
+        # Since MinimalTerminal doesn't have a direct "start_interactive_process" for complex debug setups,
+        # we'll send the commands directly. This might require a more robust terminal or a different
+        # approach for full debugger integration.
+        
+        # Example: If we need to change directory and then run the debug command
+        # This assumes the terminal is running a shell (e.g., powershell.exe or bash)
+        commands_to_send = []
+        if working_dir and os.path.abspath(working_dir) != os.path.abspath(os.getcwd()):
+            # Change directory if not already in the correct working directory
+            if os.name == 'nt': # Windows
+                commands_to_send.append(f"cd /d \"{working_dir}\"")
+            else: # Linux/macOS
+                commands_to_send.append(f"cd \"{working_dir}\"")
+        
+        commands_to_send.append(" ".join(command_parts))
+        
+        for cmd in commands_to_send:
+            self.terminal_run_command_requested.emit((cmd + "\n").encode('utf-8'))
 
 
     @Slot(str)
